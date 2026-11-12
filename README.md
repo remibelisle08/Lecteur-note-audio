@@ -35,7 +35,7 @@ Quand une nouvelle version est publiée, un bandeau « Nouvelle version disponib
 
 Pour la personne qui gère le dépôt :
 
-1. **Fusionne le code dans `main`.** Le code de l'app se trouve pour l'instant sur la branche `claude/notes-podcast-app-vsuwaf`, et le site n'est publié que depuis `main`. Sur GitHub : onglet **Pull requests** → **New pull request** → **base : `main`** ← **compare : `claude/notes-podcast-app-vsuwaf`** → **Create pull request** → **Merge pull request**.
+1. **Fusionne le code dans `main`.** Le code de l'app se trouve pour l'instant sur la branche de travail créée par Claude (son nom commence par `claude/`), et le site n'est publié que depuis `main`. Sur GitHub : onglet **Pull requests** → **New pull request** → **base : `main`** ← **compare : la branche qui commence par `claude/`** → **Create pull request** → **Merge pull request**.
 2. Ouvre le dépôt → **Settings** → **Pages**.
 3. Dans **Source**, choisis **GitHub Actions**.
 4. Le déploiement se fait automatiquement à chaque *push* sur la branche `main` (onglet **Actions** pour suivre l'avancement). L'app est ensuite disponible à l'adresse indiquée plus haut.
