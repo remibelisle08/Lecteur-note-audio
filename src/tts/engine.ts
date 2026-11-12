@@ -41,7 +41,8 @@ type Pending = { resolve: (r: WorkerResponse) => void; reject: (e: Error) => voi
 /**
  * Lance le moteur Piper dans un Web Worker. Télécharge la voix si besoin (onDownload
  * reçoit le ratio 0–1) ; la fréquence d'échantillonnage est celle du .onnx.json de la voix.
- * Une erreur d'initialisation est rejetée avec DOWNLOAD_ERROR (erreur d'origine en `cause`).
+ * Navigateur sans WebAssembly SIMD : rejet immédiat avec SIMD_ERROR (aucun worker lancé).
+ * Toute autre erreur d'initialisation est rejetée avec DOWNLOAD_ERROR (erreur d'origine en `cause`).
  */
 export async function createWorkerEngine(
   voiceId: string,

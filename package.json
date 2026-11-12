@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "e2e": "echo \"Aucun test e2e configuré pour l'instant\""
+    "e2e": "playwright test --trace off"
   },
   "dependencies": {
     "@breezystack/lamejs": "1.2.7",
@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@diffusionstudio/vits-web": "1.0.3",
+    "@playwright/test": "1.63.0",
     "@tesseract.js-data/fra": "1.0.0",
     "@testing-library/dom": "10.4.2",
     "@testing-library/jest-dom": "7.0.1",
