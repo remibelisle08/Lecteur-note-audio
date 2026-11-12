@@ -127,6 +127,66 @@ describe('createDriveClient', () => {
     await expect(client.api.deleteFile('f1')).rejects.toThrow('500');
   });
 
+  /** Drive factice par URL : files.list, métadonnées, contenu, création, mise à jour. */
+  function routedFetch(routes: (url: string, init: RequestInit) => ReturnType<typeof res> | undefined) {
+    const fetchMock = vi.fn(async (url: string, init: RequestInit = {}) => routes(url, init) ?? res(500));
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+  const qOf = (url: string) => new URLSearchParams(url.split('?')[1]).get('q') ?? '';
+
+  it('libraryVersion : métadonnées seulement (id,version,trashed), null sans fichier ; writeLibrary renvoie la version', async () => {
+    storeToken();
+    let exists = false;
+    const fetchMock = routedFetch((url, init) => {
+      if (url.includes('/drive/v3/files?') && qOf(url).includes('library.json')) {
+        return res(200, { files: exists ? [{ id: 'lib' }] : [] });
+      }
+      if (url.endsWith('/drive/v3/files/lib?fields=id%2Cversion%2Ctrashed')) return res(200, { id: 'lib', version: '7' });
+      if (url.includes('/upload/drive/v3/files?uploadType=multipart') && init.method === 'POST') {
+        exists = true;
+        return res(200, { id: 'lib', version: '1' });
+      }
+      if (url.includes('/upload/drive/v3/files/lib?uploadType=media') && init.method === 'PATCH') {
+        return res(200, { id: 'lib', version: '8' });
+      }
+      return undefined;
+    });
+    const client = createDriveClient('client-id');
+    await expect(client.api.libraryVersion('folder')).resolves.toBeNull();
+    await expect(client.api.writeLibrary('folder', '{}')).resolves.toBe('1');
+    await expect(client.api.libraryVersion('folder')).resolves.toBe('7');
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes('alt=media'))).toBe(false);
+    await expect(client.api.writeLibrary('folder', '{"a":1}')).resolves.toBe('8');
+  });
+
+  it('404 sur l’identifiant en cache (fichier ou dossier supprimé) → cache vidé, un seul nouvel essai', async () => {
+    storeToken();
+    let folderCalls = 0;
+    const fetchMock = routedFetch((url, init) => {
+      if (url.includes('/drive/v3/files?') && qOf(url).includes('vnd.google-apps.folder')) {
+        folderCalls++;
+        return res(200, { files: [{ id: folderCalls === 1 ? 'old-folder' : 'new-folder' }] });
+      }
+      if (url.includes('/drive/v3/files?') && qOf(url).includes('library.json')) {
+        return res(200, { files: [{ id: qOf(url).includes("'old-folder'") ? 'old-lib' : 'new-lib' }] });
+      }
+      if (url.includes('/files/old-lib')) return res(404);
+      if (url.includes('/upload/drive/v3/files/new-lib?uploadType=media') && init.method === 'PATCH') {
+        return res(200, { id: 'new-lib', version: '3' });
+      }
+      return undefined;
+    });
+    const client = createDriveClient('client-id');
+    const folder = await client.api.ensureFolder();
+    expect(folder).toBe('old-folder');
+    await expect(client.api.writeLibrary(folder, '{}')).resolves.toBe('3');
+    expect(await client.api.ensureFolder()).toBe('new-folder');
+    // Encore un 404 après le nouvel essai : erreur propagée (pas de boucle).
+    fetchMock.mockImplementation(async () => res(404));
+    await expect(client.api.writeLibrary('new-folder', '{}')).rejects.toThrow('404');
+  });
+
   it('sans réponse de Google Identity en 60 s → DriveAuthError', async () => {
     vi.useFakeTimers();
     const gis = fakeGis();

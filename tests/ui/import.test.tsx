@@ -45,6 +45,8 @@ describe('ImportScreen', () => {
     expect(notes[0]).toMatchObject({ title: 'Notes d', status: 'draft', usedOcr: true, sourceFileName: 'd.docx' });
     const chapters = await lib.listChapters(notes[0].id);
     expect(chapters).toMatchObject([{ title: 'Intro', index: 0, included: true, audioStatus: 'pending' }]);
+    // Fin du lot (setBusy(false)) attendue dans le test : pas de mise à jour hors act().
+    await waitFor(() => expect(screen.getByLabelText(/Choisir des fichiers/)).not.toBeDisabled());
   });
 
   it('un seul fichier importé → brouillon enregistré puis #/preview/:id', async () => {

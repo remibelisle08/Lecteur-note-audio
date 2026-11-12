@@ -32,13 +32,18 @@ function readText(blob: Blob): Promise<string> {
 /** DriveApi en mémoire. */
 function fakeDrive(initialLibrary: string | null = null) {
   let library = initialLibrary;
+  /** Numéro de version Drive de library.json (incrémenté à chaque écriture). */
+  let version = initialLibrary === null ? 0 : 1;
   const files = new Map<string, Blob>();
   let next = 1;
   const api = {
     ensureFolder: vi.fn(async () => 'folder-1'),
+    libraryVersion: vi.fn(async (_folderId: string) => (library === null ? null : String(version))),
     readLibrary: vi.fn(async (_folderId: string) => library),
     writeLibrary: vi.fn(async (_folderId: string, json: string) => {
       library = json;
+      version++;
+      return String(version);
     }),
     uploadAudio: vi.fn(async (_folderId: string, _chapterId: string, blob: Blob) => {
       const id = `file-${next++}`;
@@ -54,7 +59,18 @@ function fakeDrive(initialLibrary: string | null = null) {
       files.delete(fileId);
     }),
   } satisfies DriveApi;
-  return { api, files, get library() { return library; } };
+  return {
+    api,
+    files,
+    get library() {
+      return library;
+    },
+    /** Écriture par un autre appareil. */
+    externalWrite(json: string) {
+      library = json;
+      version++;
+    },
+  };
 }
 
 const settings = (over: Partial<Settings> = {}) => async (): Promise<Settings> => ({ ...DEFAULT_SETTINGS, ...over });
@@ -241,7 +257,7 @@ describe('SyncEngine.syncNow', () => {
   it('DriveAuthError → auth-required', async () => {
     const lib = await openTestLibrary();
     const drive = fakeDrive();
-    drive.api.readLibrary.mockRejectedValueOnce(new DriveAuthError());
+    drive.api.libraryVersion.mockRejectedValueOnce(new DriveAuthError());
     const engine = new SyncEngine(lib, drive.api, settings());
     const statuses: SyncStatus[] = [];
     engine.onStatus((s) => statuses.push(s));
@@ -269,16 +285,47 @@ describe('SyncEngine.syncNow', () => {
     const lib = await openTestLibrary();
     const drive = fakeDrive();
     let release!: () => void;
-    drive.api.readLibrary.mockImplementationOnce(() => new Promise((r) => (release = () => r(null))));
+    drive.api.libraryVersion.mockImplementationOnce(() => new Promise((r) => (release = () => r(null))));
     const engine = new SyncEngine(lib, drive.api, settings());
     const first = engine.syncNow();
-    await vi.waitFor(() => expect(drive.api.readLibrary).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(drive.api.libraryVersion).toHaveBeenCalledTimes(1));
     const second = engine.syncNow();
     const third = engine.syncNow();
     expect(second).toBe(third);
     release();
     await Promise.all([first, second, third]);
+    expect(drive.api.libraryVersion).toHaveBeenCalledTimes(2);
+  });
+
+  it('version distante inchangée → pas de téléchargement ; local inchangé → pas de téléversement', async () => {
+    const lib = await openTestLibrary();
+    await seedNote(lib);
+    const drive = fakeDrive(JSON.stringify({ ...emptySnap(), courses: [course1], notes: [note('n2')] }));
+    const engine = new SyncEngine(lib, drive.api, settings());
+    await engine.syncNow();
+    expect(drive.api.readLibrary).toHaveBeenCalledTimes(1);
+    expect(drive.api.writeLibrary).toHaveBeenCalledTimes(1); // n1 local publié
+
+    // Rien n'a changé, ni ici ni sur Drive : ni téléchargement ni téléversement.
+    const res = await engine.syncNow();
+    expect(res.ok).toBe(true);
+    expect(drive.api.readLibrary).toHaveBeenCalledTimes(1);
+    expect(drive.api.writeLibrary).toHaveBeenCalledTimes(1);
+
+    // Changement local (progression) : téléversé, sans retélécharger le distant.
+    await lib.saveProgress({ noteId: 'n1', chapterIndex: 0, positionSec: 42, completedChapterIds: [], updatedAt: 0 });
+    await engine.syncNow();
+    expect(drive.api.readLibrary).toHaveBeenCalledTimes(1);
+    expect(drive.api.writeLibrary).toHaveBeenCalledTimes(2);
+    expect((JSON.parse(drive.library!) as Snapshot).progress[0].positionSec).toBe(42);
+
+    // Écriture d'un autre appareil : nouvelle version → téléchargée et fusionnée.
+    const remote = JSON.parse(drive.library!) as Snapshot;
+    drive.externalWrite(JSON.stringify({ ...remote, notes: [...remote.notes, note('n3')] }));
+    await engine.syncNow();
     expect(drive.api.readLibrary).toHaveBeenCalledTimes(2);
+    expect((await lib.listNotes('c1')).map((x) => x.id).sort()).toEqual(['n1', 'n2', 'n3']);
+    expect(drive.api.writeLibrary).toHaveBeenCalledTimes(2); // déjà à jour : rien à republier
   });
 
   it('ses propres écritures ne relancent pas de synchro', async () => {
@@ -349,6 +396,35 @@ describe('SyncEngine — déclencheurs', () => {
     await lib.saveProgress(p);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(sync).toHaveBeenCalledTimes(2);
+  });
+
+  it('page masquée : synchro de progression au plus toutes les 5 min ; une synchro au passage en arrière-plan', async () => {
+    const { lib, engine, sync } = await setup();
+    let hidden = false;
+    const spy = vi.spyOn(document, 'hidden', 'get').mockImplementation(() => hidden);
+    engine.start();
+    sync.mockClear();
+    hidden = true;
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(sync).toHaveBeenCalledTimes(1); // vidage au passage en arrière-plan
+    sync.mockClear();
+    const p = { noteId: 'n1', chapterIndex: 0, positionSec: 0, completedChapterIds: [], updatedAt: 0 };
+    for (let t = 0; t < 120; t++) {
+      await lib.saveProgress({ ...p, positionSec: t * 5 });
+      await vi.advanceTimersByTimeAsync(5000);
+    } // 10 min d'écoute écran verrouillé
+    expect(sync).toHaveBeenCalledTimes(2); // à 5 min et à 10 min
+    // Une modification de la bibliothèque garde son délai de 5 s.
+    sync.mockClear();
+    await lib.saveCourse({ id: 'a', name: 'A', order: 0, updatedAt: 0 });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(sync).toHaveBeenCalledTimes(1);
+    engine.stop();
+    hidden = false;
+    document.dispatchEvent(new Event('visibilitychange'));
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(sync).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
   });
 
   it('stop() annule une synchro en attente', async () => {

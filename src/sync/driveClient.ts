@@ -24,10 +24,16 @@ export class DriveAuthError extends Error {
   }
 }
 
+/** Fichier introuvable (404) : identifiant en cache périmé (fichier ou dossier supprimé sur Drive). */
+class DriveNotFoundError extends Error {}
+
 export interface DriveApi {
   ensureFolder(): Promise<string>;
+  /** Version Drive de library.json (métadonnées seules, sans contenu), ou null s'il n'existe pas. */
+  libraryVersion(folderId: string): Promise<string | null>;
   readLibrary(folderId: string): Promise<string | null>;
-  writeLibrary(folderId: string, json: string): Promise<void>;
+  /** Écrit library.json et renvoie sa nouvelle version Drive (si connue). */
+  writeLibrary(folderId: string, json: string): Promise<string | undefined>;
   uploadAudio(folderId: string, chapterId: string, blob: Blob): Promise<string>;
   downloadAudio(fileId: string): Promise<Blob>;
   deleteFile(fileId: string): Promise<void>;
@@ -243,7 +249,10 @@ export function createDriveClient(clientId: string): DriveClient {
       forgetToken();
       throw new DriveAuthError();
     }
-    if (!res.ok && !okStatuses.includes(res.status)) throw new Error(`Drive : erreur HTTP ${res.status}`);
+    if (!res.ok && !okStatuses.includes(res.status)) {
+      const message = `Drive : erreur HTTP ${res.status}`;
+      throw res.status === 404 ? new DriveNotFoundError(message) : new Error(message);
+    }
     return res;
   }
 
@@ -253,22 +262,41 @@ export function createDriveClient(clientId: string): DriveClient {
     return data.files?.[0]?.id;
   }
 
+  type FileMeta = { id: string; version?: string | number };
+  const versionOf = (m: FileMeta) => (m.version === undefined ? undefined : String(m.version));
+
   async function createMultipart(metadata: Record<string, unknown>, content: Blob | string, type: string) {
     const { body, contentType } = buildMultipartBody(metadata, content, type);
-    const res = await request(`${UPLOAD}/files?uploadType=multipart&fields=id`, {
+    const res = await request(`${UPLOAD}/files?uploadType=multipart&fields=id,version`, {
       method: 'POST',
       headers: { 'Content-Type': contentType },
       body,
     });
-    return ((await res.json()) as { id: string }).id;
+    return (await res.json()) as FileMeta;
   }
 
   async function updateMedia(fileId: string, content: Blob | string, type: string) {
-    await request(`${UPLOAD}/files/${encodeURIComponent(fileId)}?uploadType=media&fields=id`, {
+    const res = await request(`${UPLOAD}/files/${encodeURIComponent(fileId)}?uploadType=media&fields=id,version`, {
       method: 'PATCH',
       headers: { 'Content-Type': type },
       body: content,
     });
+    return (await res.json()) as FileMeta;
+  }
+
+  /**
+   * Exécute `fn` sur le dossier donné ; sur un 404 (dossier ou library.json supprimé depuis la mise en cache),
+   * oublie les identifiants en cache et réessaie une seule fois sur le dossier retrouvé (ou recréé).
+   */
+  async function retryOnStale<T>(folder: string, fn: (folder: string) => Promise<T>): Promise<T> {
+    try {
+      return await fn(folder);
+    } catch (err) {
+      if (!(err instanceof DriveNotFoundError)) throw err;
+      folderId = undefined;
+      libraryFileId = undefined;
+      return fn(await api.ensureFolder());
+    }
   }
 
   const api: DriveApi = {
@@ -285,31 +313,49 @@ export function createDriveClient(clientId: string): DriveClient {
       }
       return folderId;
     },
-    async readLibrary(folder) {
-      libraryFileId = await findFile(fileInFolderQuery(LIBRARY_FILE, folder));
-      if (!libraryFileId) return null;
-      const res = await request(`${API}/files/${encodeURIComponent(libraryFileId)}?alt=media`);
-      return res.text();
+    libraryVersion(folder) {
+      return retryOnStale(folder, async (f) => {
+        libraryFileId ??= await findFile(fileInFolderQuery(LIBRARY_FILE, f));
+        if (!libraryFileId) return null;
+        const params = new URLSearchParams({ fields: 'id,version,trashed' }).toString();
+        const res = await request(`${API}/files/${encodeURIComponent(libraryFileId)}?${params}`);
+        const meta = (await res.json()) as FileMeta & { trashed?: boolean };
+        // Mis à la corbeille : traité comme supprimé (le fichier sera retrouvé ou recréé).
+        if (meta.trashed) throw new DriveNotFoundError('library.json à la corbeille');
+        return versionOf(meta) ?? null;
+      });
     },
-    async writeLibrary(folder, json) {
-      libraryFileId ??= await findFile(fileInFolderQuery(LIBRARY_FILE, folder));
-      if (libraryFileId) await updateMedia(libraryFileId, json, 'application/json');
-      else {
-        libraryFileId = await createMultipart(
-          { name: LIBRARY_FILE, parents: [folder], mimeType: 'application/json' },
+    readLibrary(folder) {
+      return retryOnStale(folder, async (f) => {
+        libraryFileId ??= await findFile(fileInFolderQuery(LIBRARY_FILE, f));
+        if (!libraryFileId) return null;
+        const res = await request(`${API}/files/${encodeURIComponent(libraryFileId)}?alt=media`);
+        return res.text();
+      });
+    },
+    writeLibrary(folder, json) {
+      return retryOnStale(folder, async (f) => {
+        libraryFileId ??= await findFile(fileInFolderQuery(LIBRARY_FILE, f));
+        if (libraryFileId) return versionOf(await updateMedia(libraryFileId, json, 'application/json'));
+        const created = await createMultipart(
+          { name: LIBRARY_FILE, parents: [f], mimeType: 'application/json' },
           json,
           'application/json',
         );
-      }
+        libraryFileId = created.id;
+        return versionOf(created);
+      });
     },
-    async uploadAudio(folder, chapterId, blob) {
-      const name = audioFileName(chapterId);
-      const existing = await findFile(fileInFolderQuery(name, folder));
-      if (existing) {
-        await updateMedia(existing, blob, 'audio/mpeg');
-        return existing;
-      }
-      return createMultipart({ name, parents: [folder], mimeType: 'audio/mpeg' }, blob, 'audio/mpeg');
+    uploadAudio(folder, chapterId, blob) {
+      return retryOnStale(folder, async (f) => {
+        const name = audioFileName(chapterId);
+        const existing = await findFile(fileInFolderQuery(name, f));
+        if (existing) {
+          await updateMedia(existing, blob, 'audio/mpeg');
+          return existing;
+        }
+        return (await createMultipart({ name, parents: [f], mimeType: 'audio/mpeg' }, blob, 'audio/mpeg')).id;
+      });
     },
     async downloadAudio(fileId) {
       const res = await request(`${API}/files/${encodeURIComponent(fileId)}?alt=media`);

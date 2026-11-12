@@ -12,6 +12,7 @@ function fakeClient(connected: boolean) {
   let linked = connected;
   const api: DriveApi = {
     ensureFolder: vi.fn(async () => 'f'),
+    libraryVersion: vi.fn(async () => null),
     readLibrary: vi.fn(async () => null),
     writeLibrary: vi.fn(async () => undefined),
     uploadAudio: vi.fn(async () => 'id'),

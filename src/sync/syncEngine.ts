@@ -13,6 +13,8 @@ export const FAILED_MESSAGE = 'La synchro Drive a échoué (connexion ?). Nouvel
 export const LIBRARY_DEBOUNCE_MS = 5_000;
 /** Pendant l'écoute, la position est synchronisée au plus toutes les 30 s. */
 export const PROGRESS_INTERVAL_MS = 30_000;
+/** Page masquée (écran verrouillé) : position synchronisée au plus toutes les 5 min (données mobiles, batterie). */
+export const HIDDEN_PROGRESS_INTERVAL_MS = 5 * 60_000;
 
 class CorruptRemoteError extends Error {}
 
@@ -49,6 +51,11 @@ export class SyncEngine {
   private libraryTimer?: ReturnType<typeof setTimeout>;
   private progressTimer?: ReturnType<typeof setTimeout>;
   private lastTriggerAt = -Infinity;
+  /**
+   * Dernier library.json lu ou écrit par cet appareil, avec sa version Drive : tant que la version distante
+   * est la même, il n'est pas retéléchargé, et un instantané local identique n'est pas republié.
+   */
+  private known?: { version: string; json: string; snapshot: Snapshot };
 
   constructor(
     private lib: Library,
@@ -95,6 +102,7 @@ export class SyncEngine {
     if (this.started) return;
     this.started = true;
     window.addEventListener('online', this.onOnline);
+    document.addEventListener('visibilitychange', this.onVisibility);
     this.unsubLib = this.lib.onChange(this.onLibChange);
     this.trigger();
   }
@@ -103,6 +111,7 @@ export class SyncEngine {
     if (!this.started) return;
     this.started = false;
     window.removeEventListener('online', this.onOnline);
+    document.removeEventListener('visibilitychange', this.onVisibility);
     this.unsubLib?.();
     this.unsubLib = undefined;
     clearTimeout(this.libraryTimer);
@@ -118,6 +127,30 @@ export class SyncEngine {
 
   private onOnline = () => this.trigger();
 
+  /** Passage en arrière-plan : une synchro tout de suite (vidage), la progression passe ensuite au rythme lent. */
+  private onVisibility = () => {
+    if (!this.started) return;
+    if (document.hidden) {
+      clearTimeout(this.progressTimer);
+      this.progressTimer = undefined;
+      this.trigger();
+    } else if (this.progressTimer !== undefined) {
+      // Retour au premier plan : la synchro de progression en attente reprend le rythme normal.
+      clearTimeout(this.progressTimer);
+      this.progressTimer = undefined;
+      this.scheduleProgress();
+    }
+  };
+
+  private scheduleProgress() {
+    const interval = document.hidden ? HIDDEN_PROGRESS_INTERVAL_MS : PROGRESS_INTERVAL_MS;
+    const delay = Math.max(0, this.lastTriggerAt + interval - Date.now());
+    this.progressTimer = setTimeout(() => {
+      this.progressTimer = undefined;
+      this.trigger();
+    }, delay);
+  }
+
   private onLibChange = (kind: ChangeKind) => {
     if (this.selfWrites > 0 || !this.started) return;
     if (kind === 'library') {
@@ -127,11 +160,7 @@ export class SyncEngine {
         this.trigger();
       }, LIBRARY_DEBOUNCE_MS);
     } else if (this.progressTimer === undefined) {
-      const delay = Math.max(0, this.lastTriggerAt + PROGRESS_INTERVAL_MS - Date.now());
-      this.progressTimer = setTimeout(() => {
-        this.progressTimer = undefined;
-        this.trigger();
-      }, delay);
+      this.scheduleProgress();
     }
   };
 
@@ -150,8 +179,22 @@ export class SyncEngine {
     this.setStatus({ state: 'syncing', lastSyncAt });
     try {
       const folderId = await this.api.ensureFolder();
-      const raw = await this.api.readLibrary(folderId);
-      const remote = raw === null ? EMPTY : parseSnapshot(raw);
+      // Métadonnées d'abord : le contenu n'est téléchargé que si une autre écriture a eu lieu depuis la nôtre.
+      const version = await this.api.libraryVersion(folderId);
+      let raw: string | null;
+      let remote: Snapshot;
+      let readVersion: string | null = version;
+      if (version === null) {
+        raw = null;
+        remote = EMPTY;
+      } else if (this.known && this.known.version === version) {
+        raw = this.known.json;
+        remote = this.known.snapshot;
+      } else {
+        raw = await this.api.readLibrary(folderId);
+        remote = raw === null ? EMPTY : parseSnapshot(raw);
+        if (raw === null) readVersion = null;
+      }
 
       // Fusion dans une seule transaction locale : les écritures concurrentes ne sont pas écrasées.
       const { local, merged } = await this.selfWrite(() => this.lib.mergeRemote(remote));
@@ -196,7 +239,13 @@ export class SyncEngine {
 
       const final = await this.lib.exportSnapshot();
       const json = JSON.stringify(final);
-      if (raw === null || json !== JSON.stringify(remote)) await this.api.writeLibrary(folderId, json);
+      const remoteJson = raw === null ? null : JSON.stringify(remote);
+      if (remoteJson === null || json !== remoteJson) {
+        const written = await this.api.writeLibrary(folderId, json);
+        this.known = written === undefined ? undefined : { version: written, json, snapshot: final };
+      } else {
+        this.known = readVersion === null ? undefined : { version: readVersion, json, snapshot: remote };
+      }
 
       result.ok = true;
       this.setStatus({ state: 'idle', lastSyncAt: Date.now() });
