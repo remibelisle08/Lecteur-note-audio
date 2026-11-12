@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { AppProvider, useApp, type AppServices } from './AppContext';
 import { MiniPlayer } from './components/MiniPlayer';
 import { usePlayerHasItem } from './hooks/usePlayerState';
@@ -48,6 +48,36 @@ function DriveReconnect() {
   );
 }
 
+/** Nouvelle version déployée : le service worker attend ; « Recharger » l'applique tout de suite. */
+function UpdateBanner() {
+  const [apply, setApply] = useState<null | (() => void)>(null);
+  useEffect(() => {
+    if (!import.meta.env.PROD) return;
+    let cancelled = false;
+    import('virtual:pwa-register')
+      .then(({ registerSW }) => {
+        const update = registerSW({
+          onNeedRefresh() {
+            if (!cancelled) setApply(() => () => void update(true));
+          },
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  if (!apply) return null;
+  return (
+    <div className="banner banner-row" role="status">
+      <span>Nouvelle version disponible —</span>
+      <button type="button" className="btn" onClick={apply}>
+        Recharger
+      </button>
+    </div>
+  );
+}
+
 function Shell() {
   const route = useRoute();
   const hasItem = usePlayerHasItem();
@@ -60,6 +90,7 @@ function Shell() {
     <>
       <VoiceDownload />
       <DriveReconnect />
+      <UpdateBanner />
       <main className={`screen${mini ? ' has-mini' : ''}`}>
         <Screen route={route} />
       </main>

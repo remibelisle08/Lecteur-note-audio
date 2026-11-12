@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+/// <reference types="vite-plugin-pwa/client" />
 
 interface ImportMetaEnv {
   /** ID client OAuth Google (public) pour la synchro Drive ; absent → synchro non configurée. */

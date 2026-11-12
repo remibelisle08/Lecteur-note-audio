@@ -2,7 +2,6 @@
 // Worker Piper : phonémiseur (piper-wasm) + UNE session ONNX par voix, WASM servis localement.
 // Non testé unitairement (WASM) ; la logique pure est dans piper.ts.
 import * as ort from 'onnxruntime-web/wasm';
-import ortWasmUrl from '../../node_modules/onnxruntime-web/dist/ort-wasm.wasm?url';
 import ortWasmSimdUrl from '../../node_modules/onnxruntime-web/dist/ort-wasm-simd.wasm?url';
 import createPiperPhonemize from '@diffusionstudio/piper-wasm/build/piper_phonemize.js';
 import phonemizeWasmUrl from '@diffusionstudio/piper-wasm/build/piper_phonemize.wasm?url';
@@ -23,7 +22,8 @@ import {
 declare const self: DedicatedWorkerGlobalScope;
 
 ort.env.wasm.numThreads = 1;
-ort.env.wasm.wasmPaths = { 'ort-wasm.wasm': ortWasmUrl, 'ort-wasm-simd.wasm': ortWasmSimdUrl };
+// Seule la variante SIMD est embarquée (Safari 16.4+, Chrome, Firefox récents) : la variante non-SIMD pèse ~10 Mo de plus.
+ort.env.wasm.wasmPaths = { 'ort-wasm-simd.wasm': ortWasmSimdUrl };
 
 const post = (msg: WorkerResponse, transfer: Transferable[] = []) => self.postMessage(msg, transfer);
 
