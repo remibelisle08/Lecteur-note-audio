@@ -12,8 +12,8 @@ export function bindMediaSession(ctrl: PlayerController): void {
     ['pause', () => ctrl.pause()],
     ['seekbackward', (d) => ctrl.seekBy(-(d.seekOffset ?? SEEK_SEC))],
     ['seekforward', (d) => ctrl.seekBy(d.seekOffset ?? SEEK_SEC)],
-    ['previoustrack', () => void ctrl.prev()],
-    ['nexttrack', () => void ctrl.next()],
+    ['previoustrack', () => void ctrl.prev().catch(() => undefined)],
+    ['nexttrack', () => void ctrl.next().catch(() => undefined)],
     ['seekto', (d) => {
       if (typeof d.seekTime === 'number') ctrl.seekTo(d.seekTime);
     }],

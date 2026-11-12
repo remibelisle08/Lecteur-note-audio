@@ -19,6 +19,7 @@ export type PlayerState = {
   duration: number;
   rate: number;
   waitingForAudio: boolean;
+  error?: string;
 };
 
 const SAVE_EVERY_MS = 5000;
@@ -26,6 +27,7 @@ const COMPLETE_RATIO = 0.95;
 const RESTART_THRESHOLD_SEC = 3;
 const MIN_RATE = 0.75;
 const MAX_RATE = 2;
+const LOAD_ERROR = 'Impossible de charger ce chapitre. Vérifie ta connexion.';
 
 export class PlayerController {
   private queue: QueueItem[] = [];
@@ -34,6 +36,7 @@ export class PlayerController {
   private playing = false;
   private wantPlay = false;
   private waiting = false;
+  private error?: string;
   private rate = 1;
   private rateTouched = false;
   private objectUrl?: string;
@@ -63,6 +66,7 @@ export class PlayerController {
 
   async loadNote(noteId: string): Promise<void> {
     const my = ++this.token;
+    this.wantPlay = false;
     await this.ensureRate();
     const note = await this.lib.getNote(noteId);
     if (!note) return;
@@ -86,6 +90,7 @@ export class PlayerController {
 
   async loadCourse(courseId: string): Promise<void> {
     const my = ++this.token;
+    this.wantPlay = false;
     await this.ensureRate();
     const course = (await this.lib.listCourses()).find((c) => c.id === courseId);
     const notes = await this.lib.listNotes(courseId);
@@ -124,8 +129,9 @@ export class PlayerController {
 
   private setQueue(groups: { noteTitle: string; courseName: string; chapters: Chapter[] }[]) {
     this.stopTimer();
-    this.audio.pause();
     this.playing = false;
+    this.error = undefined;
+    this.audio.pause();
     this.chapters = groups.flatMap((g) => g.chapters);
     this.queue = groups.flatMap((g) =>
       g.chapters.map((c) => ({
@@ -169,37 +175,54 @@ export class PlayerController {
       return;
     }
     this.stopTimer();
+    // playing=false avant pause() : le évènement 'pause' asynchrone n'est ainsi pas pris pour une pause utilisateur.
+    this.playing = false;
+    this.error = undefined;
     this.audio.pause();
     this.index = i;
-    const ch = this.chapters[i];
-    const blob = await this.resolveBlob(ch);
-    if (my !== this.token) return;
-    if (!blob) {
-      this.releaseUrl();
-      this.audio.src = '';
-      this.waiting = true;
-      this.playing = false;
-      this.emit();
-      return;
-    }
-    this.waiting = false;
-    this.releaseUrl();
-    this.objectUrl = URL.createObjectURL(blob);
-    this.audio.src = this.objectUrl;
-    this.applyRate();
-    if (startPos > 0) {
-      this.audio.currentTime = startPos;
-      const onMeta = () => {
-        this.audio.removeEventListener('loadedmetadata', onMeta);
-        if (my === this.token && this.audio.currentTime !== startPos) this.audio.currentTime = startPos;
+    try {
+      const ch = this.chapters[i];
+      const blob = await this.resolveBlob(ch);
+      if (my !== this.token) return;
+      if (!blob) {
+        this.releaseUrl();
+        this.clearSource();
+        this.waiting = true;
         this.emit();
-      };
-      this.audio.addEventListener('loadedmetadata', onMeta);
+        return;
+      }
+      this.waiting = false;
+      this.releaseUrl();
+      this.objectUrl = URL.createObjectURL(blob);
+      this.audio.src = this.objectUrl;
+      this.applyRate();
+      if (startPos > 0) {
+        this.audio.currentTime = startPos;
+        const onMeta = () => {
+          this.audio.removeEventListener('loadedmetadata', onMeta);
+          if (my === this.token && this.audio.currentTime !== startPos) this.audio.currentTime = startPos;
+          this.emit();
+        };
+        this.audio.addEventListener('loadedmetadata', onMeta);
+      }
+      // Lancer la lecture sans attendre IndexedDB (geste utilisateur / iOS verrouillé).
+      const started = this.wantPlay ? this.startPlayback(my) : Promise.resolve();
+      void this.persist();
+      this.emit();
+      await started;
+    } catch {
+      if (my !== this.token) return;
+      this.playing = false;
+      this.wantPlay = false;
+      this.waiting = false;
+      this.error = LOAD_ERROR;
+      this.emit();
     }
-    this.playing = false;
-    await this.persist();
-    this.emit();
-    if (this.wantPlay && my === this.token) await this.startPlayback();
+  }
+
+  private clearSource() {
+    this.audio.removeAttribute('src');
+    this.audio.load();
   }
 
   private async retryWaiting() {
@@ -215,7 +238,12 @@ export class PlayerController {
         const my = this.token;
         const cur = this.chapters[this.index];
         if (!cur) break;
-        const fresh = (await this.lib.listChapters(cur.noteId)).find((c) => c.id === cur.id);
+        let fresh: Chapter | undefined;
+        try {
+          fresh = (await this.lib.listChapters(cur.noteId)).find((c) => c.id === cur.id);
+        } catch {
+          break;
+        }
         if (!fresh || my !== this.token) break;
         this.chapters[this.index] = fresh;
         if (fresh.audioStatus === 'ready') await this.loadIndex(this.index, 0, my);
@@ -233,16 +261,19 @@ export class PlayerController {
       this.emit();
       return;
     }
-    await this.startPlayback();
+    await this.startPlayback(this.token);
   }
 
-  private async startPlayback() {
+  private async startPlayback(my: number) {
     try {
       await this.audio.play();
+      if (my !== this.token) return;
       this.playing = true;
       this.startTimer();
-    } catch {
+    } catch (e) {
+      if (my !== this.token) return;
       this.playing = false;
+      if ((e as { name?: string } | null)?.name === 'NotAllowedError') this.wantPlay = false;
     }
     this.emit();
   }
@@ -335,11 +366,12 @@ export class PlayerController {
 
   private onEnded = () => {
     this.checkCompleted(true);
-    void this.next();
+    this.next().catch(() => undefined);
   };
 
   /** Pause venue du système (interruption, écouteurs) sans passer par pause(). */
   private onNativePause = () => {
+    if (!this.audio.paused) return;
     if (this.playing && !this.audio.ended) {
       this.playing = false;
       this.wantPlay = false;
@@ -370,18 +402,22 @@ export class PlayerController {
   }
 
   private async persist(): Promise<void> {
-    const ch = this.chapters[this.index];
-    if (!ch) return;
-    const prev = this.progress.get(ch.noteId);
-    const next: Progress = {
-      noteId: ch.noteId,
-      chapterIndex: ch.index,
-      positionSec: this.waiting ? 0 : this.audio.currentTime || 0,
-      completedChapterIds: prev?.completedChapterIds ?? [],
-      updatedAt: Date.now(),
-    };
-    this.progress.set(ch.noteId, next);
-    await this.lib.saveProgress(next);
+    try {
+      const ch = this.chapters[this.index];
+      if (!ch) return;
+      const prev = this.progress.get(ch.noteId);
+      const next: Progress = {
+        noteId: ch.noteId,
+        chapterIndex: ch.index,
+        positionSec: this.waiting ? 0 : this.audio.currentTime || 0,
+        completedChapterIds: prev?.completedChapterIds ?? [],
+        updatedAt: Date.now(),
+      };
+      this.progress.set(ch.noteId, next);
+      await this.lib.saveProgress(next);
+    } catch {
+      /* sauvegarde échouée : réessayée au prochain cycle */
+    }
   }
 
   private startTimer() {
@@ -413,6 +449,7 @@ export class PlayerController {
       duration: Number.isFinite(d) && d > 0 ? d : (ch?.durationSec ?? 0),
       rate: this.rate,
       waitingForAudio: this.waiting,
+      error: this.error,
     };
   }
 

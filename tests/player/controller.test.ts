@@ -27,17 +27,21 @@ class FakeAudio extends EventTarget {
       });
     }
   }
+  playError?: { name: string };
   play = vi.fn(async () => {
+    if (this.playError) throw Object.assign(new Error('refus'), this.playError);
     this.paused = false;
     this.dispatchEvent(new Event('play'));
   });
   pause = vi.fn(() => {
+    if (this.paused) return;
     this.paused = true;
+    queueMicrotask(() => this.dispatchEvent(new Event('pause')));
   });
-  removeAttribute() {
+  removeAttribute = vi.fn(() => {
     this._src = '';
-  }
-  load() {}
+  });
+  load = vi.fn();
 }
 
 let n = 0;
@@ -45,8 +49,8 @@ let lib: Library;
 let audio: FakeAudio;
 let created: string[];
 let revoked: string[];
-const flush = async (rounds = 20) => {
-  for (let i = 0; i < rounds; i++) await new Promise<void>((r) => setTimeout(r, 1));
+const flush = async (rounds = 30) => {
+  for (let i = 0; i < rounds; i++) await new Promise<void>((r) => setImmediate(r));
 };
 
 const course = (id: string, order = 0): Course => ({ id, name: 'Cours ' + id, order, updatedAt: 0 });
@@ -122,6 +126,78 @@ describe('PlayerController', () => {
     expect(s.item).toMatchObject({ noteTitle: 'Note n1', courseName: 'Cours c1', title: 'Ch n1-1' });
     expect(audio.currentTime).toBe(42);
     expect(audio.preservesPitch).toBe(true);
+    ctrl.dispose();
+  });
+
+  it('next() pendant la lecture reprend sur le nouveau chapitre (évènement pause asynchrone)', async () => {
+    await seedNote('n1', 2);
+    const ctrl = mk();
+    await ctrl.loadNote('n1');
+    await ctrl.play();
+    await ctrl.next();
+    await flush();
+    expect(last(ctrl).index).toBe(1);
+    expect(last(ctrl).playing).toBe(true);
+    expect(audio.paused).toBe(false);
+    ctrl.dispose();
+  });
+
+  it('play() refusé (NotAllowedError) : état non menteur, pas de reprise auto', async () => {
+    await seedNote('n1', 2);
+    const ctrl = mk();
+    await ctrl.loadNote('n1');
+    audio.playError = { name: 'NotAllowedError' };
+    await ctrl.play();
+    expect(last(ctrl).playing).toBe(false);
+    audio.playError = undefined;
+    await ctrl.next();
+    await flush();
+    expect(last(ctrl).playing).toBe(false);
+    ctrl.dispose();
+  });
+
+  it('loadNote ne lance jamais la lecture automatiquement', async () => {
+    await seedNote('n1', 1);
+    await seedNote('n2', 1);
+    const ctrl = mk();
+    await ctrl.loadNote('n1');
+    await ctrl.play();
+    await ctrl.loadNote('n2');
+    await flush();
+    expect(last(ctrl).playing).toBe(false);
+    await ctrl.loadCourse('c1');
+    await flush();
+    expect(last(ctrl).playing).toBe(false);
+    ctrl.dispose();
+  });
+
+  it('échec de fetchRemoteAudio : error exposée, pas de rejet non géré', async () => {
+    await seedNote('n1', 1);
+    await lib.saveNote(note('n2'));
+    await lib.saveChapter(chapter('n2-0', 'n2', 0, { audioDriveId: 'drv' }));
+    await lib.saveChapter(chapter('n1-1', 'n1', 1, { audioDriveId: 'drv' }));
+    const ctrl = mk(async () => {
+      throw new Error('hors ligne');
+    });
+    await ctrl.loadNote('n1');
+    await ctrl.play();
+    audio.dispatchEvent(new Event('ended'));
+    await flush();
+    const s = last(ctrl);
+    expect(s.index).toBe(1);
+    expect(s.playing).toBe(false);
+    expect(s.waitingForAudio).toBe(false);
+    expect(s.error).toBe('Impossible de charger ce chapitre. Vérifie ta connexion.');
+    ctrl.dispose();
+  });
+
+  it('utilise removeAttribute(src) + load() quand le chapitre n’est pas prêt', async () => {
+    await lib.saveNote(note('n1'));
+    await lib.saveChapter(chapter('n1-0', 'n1', 0, { audioStatus: 'pending' }));
+    const ctrl = mk();
+    await ctrl.loadNote('n1');
+    expect(audio.removeAttribute).toHaveBeenCalledWith('src');
+    expect(audio.load).toHaveBeenCalled();
     ctrl.dispose();
   });
 
