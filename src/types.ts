@@ -36,6 +36,8 @@ export type Chapter = {
   audioStatus: AudioStatus;
   audioLocal: boolean;
   audioDriveId?: string;
+  /** Signalements de l'import (OCR peu fiable, légendes, quiz), affichés dans l'aperçu. */
+  flags?: ChapterFlag[];
   updatedAt: number;
 };
 export type Progress = {

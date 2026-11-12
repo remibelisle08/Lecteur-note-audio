@@ -21,6 +21,8 @@ function piperPhonemizeEsm(): Plugin {
 export default defineConfig({
   base: '/Lecteur-note-audio/',
   plugins: [react(), piperPhonemizeEsm()],
+  // pdf.js (~501 Ko) est chargé à la demande avec le module d'import : pas dans le bundle initial.
+  build: { chunkSizeWarningLimit: 600 },
   // Worker Piper en module ES, avec la même transformation du phonémiseur.
   worker: { format: 'es', plugins: () => [piperPhonemizeEsm()] },
   // Pas de pré-bundling esbuild : le plugin ci-dessus doit voir le fichier en dev aussi.

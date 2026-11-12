@@ -1,0 +1,88 @@
+import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
+import type { ImportResult } from '../import';
+import type { Library } from '../library/db';
+import type { PlayerController } from '../player/controller';
+import type { TtsEngine } from '../tts/engine';
+import type { Generator } from '../tts/generator';
+import { GenerationStore } from './generationStore';
+import { Toasts, type Toast } from './components/Toasts';
+
+export type ImportFn = (
+  file: File,
+  onProgress?: (msg: string, ratio: number) => void,
+  opts?: { forceOcr?: boolean },
+) => Promise<ImportResult>;
+
+export type GeneratorLike = Pick<Generator, 'generateNote' | 'onProgress' | 'busy'>;
+export type PlayerLike = Pick<
+  PlayerController,
+  'loadNote' | 'loadCourse' | 'play' | 'pause' | 'seekBy' | 'seekTo' | 'next' | 'prev' | 'goTo' | 'setRate' | 'subscribe'
+>;
+
+/** Services de l'application, créés une seule fois au démarrage (voir services.ts). */
+export interface AppServices {
+  lib: Library;
+  generator: GeneratorLike;
+  player: PlayerLike;
+  /** Import du document (module chargé à la demande). */
+  importFile: ImportFn;
+  /** Moteur vocal par voix (le même que celui du générateur). */
+  getEngine: (voiceId: string) => Promise<TtsEngine>;
+  /** Avancement du téléchargement de la voix (0–1). */
+  onVoiceDownload?: (l: (ratio: number) => void) => () => void;
+  /** Libère le moteur vocal s'il n'est pas celui de `keepVoiceId`. */
+  releaseEngines?: (keepVoiceId: string) => void;
+  /** Fichiers importés pendant cette session, par note (pour relancer avec l'OCR). */
+  sourceFiles: Map<string, File>;
+  /** Drive connecté (branché par la synchro Drive). */
+  driveConnected: boolean;
+}
+
+export type AppContextValue = AppServices & {
+  generation: GenerationStore;
+  /** Affiche un message temporaire (toast). */
+  notify(message: string): void;
+};
+
+const Ctx = createContext<AppContextValue | null>(null);
+
+/** Un seul magasin par générateur, abonné pour toute la durée de l'app (pas de doublon en StrictMode). */
+const stores = new WeakMap<GeneratorLike, GenerationStore>();
+function storeFor(generator: GeneratorLike): GenerationStore {
+  let store = stores.get(generator);
+  if (!store) {
+    store = new GenerationStore((l) => generator.onProgress(l));
+    stores.set(generator, store);
+  }
+  return store;
+}
+
+export function AppProvider({ services, children }: { services: AppServices; children: ReactNode }) {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const nextId = useRef(1);
+  const generation = storeFor(services.generator);
+
+  const dismiss = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
+  const notify = useCallback(
+    (message: string) => {
+      const id = nextId.current++;
+      setToasts((t) => [...t.filter((x) => x.message !== message), { id, message }]);
+      setTimeout(() => dismiss(id), 6000);
+    },
+    [dismiss],
+  );
+
+  const value = useMemo(() => ({ ...services, generation, notify }), [services, generation, notify]);
+  return (
+    <Ctx.Provider value={value}>
+      {children}
+      <Toasts toasts={toasts} onDismiss={dismiss} />
+    </Ctx.Provider>
+  );
+}
+
+export function useApp(): AppContextValue {
+  const v = useContext(Ctx);
+  if (!v) throw new Error('useApp() hors de <AppProvider>');
+  return v;
+}
