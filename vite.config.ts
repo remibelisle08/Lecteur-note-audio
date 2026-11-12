@@ -63,7 +63,7 @@ export default defineConfig({
             // OCR (tesseract.js) : cœur WASM, worker et données de langue, mis en cache après la première utilisation.
             urlPattern: ({ url }) => url.hostname === 'cdn.jsdelivr.net' || url.hostname === 'tessdata.projectnaptha.com',
             handler: 'CacheFirst',
-            options: { cacheName: 'ocr-cdn', cacheableResponse: { statuses: [0, 200] } },
+            options: { cacheName: 'ocr-cdn', cacheableResponse: { statuses: [200] } },
           },
         ],
       },

@@ -1,3 +1,5 @@
+import { isWasmSimdSupported, SIMD_ERROR } from './simd';
+
 export interface TtsEngine {
   sampleRate: number;
   synthesize(text: string): Promise<Float32Array>;
@@ -45,6 +47,7 @@ export async function createWorkerEngine(
   voiceId: string,
   onDownload?: (ratio: number) => void,
 ): Promise<TtsEngine & { dispose(): void }> {
+  if (!isWasmSimdSupported()) throw new Error(SIMD_ERROR);
   const worker = new Worker(new URL('./tts.worker.ts', import.meta.url), { type: 'module' });
   const pending = new Map<number, Pending>();
   let nextId = 1;

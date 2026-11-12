@@ -34,6 +34,7 @@ describe('PWA (build)', () => {
     expect(existsSync(join(out, 'sw.js'))).toBe(true);
     const sw = read('sw.js');
     expect(sw).toContain('index.html');
+    expect(sw).not.toContain('huggingface');
     expect(sw).not.toMatch(/ort-wasm[^"']*\.wasm/);
     expect(sw).not.toMatch(/piper_phonemize[^"']*\.(wasm|data)/);
     expect(sw).toMatch(/tts\.worker-[^"']*\.js/);

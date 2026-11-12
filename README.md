@@ -29,15 +29,16 @@ Important : sans cette installation, iOS peut effacer les données du site aprè
 3. La génération demande un peu de temps ; **garde l'app ouverte** jusqu'à la fin.
 4. Après ça, l'app fonctionne **hors ligne** (lecture, bibliothèque, génération avec les fichiers déjà téléchargés).
 
-Quand une nouvelle version est publiée, un bandeau « Nouvelle version disponible — Recharger » apparaît. Sinon, elle s'applique toute seule au prochain lancement.
+Quand une nouvelle version est publiée, un bandeau « Nouvelle version disponible — Recharger » apparaît. La nouvelle version s'applique quand tu touches **Recharger** dans ce bandeau, ou après avoir complètement fermé l'app puis rouvert.
 
 ## Activer GitHub Pages (une seule fois)
 
 Pour la personne qui gère le dépôt :
 
-1. Sur GitHub, ouvre le dépôt → **Settings** → **Pages**.
-2. Dans **Source**, choisis **GitHub Actions**.
-3. Le déploiement se fait automatiquement à chaque *push* sur la branche `main` (onglet **Actions** pour suivre l'avancement). L'app est ensuite disponible à l'adresse indiquée plus haut.
+1. **Fusionne le code dans `main`.** Le code de l'app se trouve pour l'instant sur la branche `claude/notes-podcast-app-vsuwaf`, et le site n'est publié que depuis `main`. Sur GitHub : onglet **Pull requests** → **New pull request** → **base : `main`** ← **compare : `claude/notes-podcast-app-vsuwaf`** → **Create pull request** → **Merge pull request**.
+2. Ouvre le dépôt → **Settings** → **Pages**.
+3. Dans **Source**, choisis **GitHub Actions**.
+4. Le déploiement se fait automatiquement à chaque *push* sur la branche `main` (onglet **Actions** pour suivre l'avancement). L'app est ensuite disponible à l'adresse indiquée plus haut.
 
 ## Synchroniser avec Google Drive (optionnel)
 
@@ -61,7 +62,7 @@ Il faut créer un identifiant gratuit (une fois, environ 15 minutes) :
 6. Sur GitHub : dépôt → **Settings** → **Secrets and variables** → **Actions** → onglet **Variables** → **New repository variable** :
    - Nom : `VITE_GOOGLE_CLIENT_ID`
    - Valeur : l'ID client copié.
-7. Relance le déploiement : onglet **Actions** → dernier workflow **CI** → **Re-run all jobs** (ou fais un nouveau *push* sur `main`).
+7. Relance le déploiement, **à partir d'une exécution sur `main`** (le code doit d'abord avoir été fusionné dans `main`, voir « Activer GitHub Pages ») : onglet **Actions** → choisis la dernière exécution de **CI** dont la branche est `main` → **Re-run all jobs**. Une exécution d'une autre branche ne publie rien.
 8. Dans l'app, ouvre **Réglages** → **Connecter Google Drive**.
 
 ## Partager l'app
@@ -72,6 +73,7 @@ Envoie simplement le lien https://remibelisle08.github.io/Lecteur-note-audio/. C
 
 - Les **tableaux** et les **formules** sont lus de façon approximative (souvent cellule par cellule ou symbole par symbole).
 - Les **schémas** et images dans un PDF ne sont pas lus ; dans un PDF numérisé, la reconnaissance de texte (OCR) peut faire des erreurs, et l'app avertit quand sa confiance est faible.
+- La voix demande un navigateur récent : **Safari 16.4 / iOS 16.4 ou plus**, ou une version récente de Chrome, Edge ou Firefox. Sinon, l'app affiche « Ton navigateur est trop ancien… ».
 - Le premier téléchargement de la voix pèse environ **60 Mo** : fais-le en Wi-Fi.
 - La **génération doit rester ouverte** : ne ferme pas l'app et ne verrouille pas l'écran pendant qu'elle travaille (elle reprend si elle est interrompue).
 - L'**OCR** (PDF numérisés) nécessite une connexion la première fois ; ensuite, ses fichiers restent en cache.
