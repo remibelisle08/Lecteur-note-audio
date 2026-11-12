@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { openLibrary, type Library } from '../../src/library/db';
 import { PlayerController, type PlayerState } from '../../src/player/controller';
 import { bindMediaSession } from '../../src/player/mediaSession';
+import { SILENT_WAV } from '../../src/player/unlock';
 import type { Chapter, Course, Note } from '../../src/types';
 
 class FakeAudio extends EventTarget {
@@ -593,6 +594,57 @@ describe('bindMediaSession', () => {
     handlers.nexttrack();
     await flush();
     expect(last(ctrl).index).toBe(1);
+    ctrl.dispose();
+  });
+});
+
+describe('PlayerController.unlock (iOS)', () => {
+  it('joue un silence puis vide la source ; les évènements du silence ne changent pas l’état', async () => {
+    const ctrl = mk();
+    const states: PlayerState[] = [];
+    ctrl.subscribe((s) => states.push(s));
+    ctrl.unlock();
+    expect(audio.play).toHaveBeenCalledTimes(1);
+    expect(audio.src).toBe(SILENT_WAV);
+    audio.dispatchEvent(new Event('timeupdate'));
+    audio.dispatchEvent(new Event('ended'));
+    await flush();
+    expect(audio.pause).toHaveBeenCalled();
+    expect(audio.removeAttribute).toHaveBeenCalledWith('src');
+    expect(states).toHaveLength(1);
+    expect(last(ctrl)).toMatchObject({ playing: false, position: 0, index: 0, item: undefined });
+    // Une seule fois par session.
+    ctrl.unlock();
+    expect(audio.play).toHaveBeenCalledTimes(1);
+    ctrl.dispose();
+  });
+
+  it('n’arrête pas une vraie piste chargée pendant le déverrouillage', async () => {
+    await seedNote('n1', 1);
+    const ctrl = mk();
+    let release!: () => void;
+    audio.play.mockImplementationOnce(() => new Promise<void>((r) => (release = r)));
+    ctrl.unlock();
+    await ctrl.loadNote('n1');
+    await ctrl.play();
+    expect(audio.src).toMatch(/^blob:/);
+    expect(last(ctrl).playing).toBe(true);
+    audio.pause.mockClear();
+    release();
+    await flush();
+    expect(audio.pause).not.toHaveBeenCalled();
+    expect(audio.paused).toBe(false);
+    expect(last(ctrl).playing).toBe(true);
+    ctrl.dispose();
+  });
+
+  it('sans effet si une source est déjà installée', async () => {
+    await seedNote('n1', 1);
+    const ctrl = mk();
+    await ctrl.loadNote('n1');
+    audio.play.mockClear();
+    ctrl.unlock();
+    expect(audio.play).not.toHaveBeenCalled();
     ctrl.dispose();
   });
 });

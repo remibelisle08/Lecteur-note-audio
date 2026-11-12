@@ -1,5 +1,6 @@
 import type { Library } from '../library/db';
 import type { Chapter, Progress } from '../types';
+import { SILENT_WAV, unlockElement } from './unlock';
 
 export type QueueItem = {
   noteId: string;
@@ -45,6 +46,9 @@ export class PlayerController {
   private index = 0;
   private playing = false;
   private wantPlay = false;
+  /** Élément déjà autorisé à jouer (iOS) ; `unlocking` : silence de déverrouillage en cours. */
+  private unlocked = false;
+  private unlocking = false;
   private status: SourceStatus = 'idle';
   /**
    * Position voulue pour le chapitre courant tant que `audio.currentTime` ne fait pas foi
@@ -262,6 +266,29 @@ export class PlayerController {
 
   // ---------- commandes ----------
 
+  /**
+   * À appeler de façon synchrone au début de chaque clic qui doit mener à une lecture (avant toute
+   * attente) : déverrouille l'élément audio pour iOS, une fois par session. Les évènements du silence
+   * ne modifient pas l'état du lecteur, et une vraie source installée entre-temps n'est jamais arrêtée.
+   */
+  unlock(): void {
+    if (this.unlocked || this.unlocking || this.audio.src) return;
+    this.unlocking = true;
+    void unlockElement(this.audio)
+      .then((ok) => {
+        this.unlocked = ok;
+        // Silence toujours en place : on rend l'élément vide, comme avant.
+        if (this.isSilent()) this.clearSource();
+      })
+      .finally(() => {
+        this.unlocking = false;
+      });
+  }
+
+  private isSilent(): boolean {
+    return this.audio.src === SILENT_WAV;
+  }
+
   async play(): Promise<void> {
     this.wantPlay = true;
     if (this.status === 'ready') return this.startPlayback(this.token);
@@ -276,6 +303,7 @@ export class PlayerController {
   private async startPlayback(my: number) {
     try {
       await this.audio.play();
+      this.unlocked = true;
       if (my !== this.token) return;
       this.playing = true;
       this.startTimer();
@@ -372,18 +400,20 @@ export class PlayerController {
   // ---------- événements audio ----------
 
   private onTimeUpdate = () => {
+    if (this.isSilent()) return;
     this.checkCompleted(false);
     this.emit();
   };
 
   private onEnded = () => {
+    if (this.unlocking || this.isSilent()) return;
     this.checkCompleted(true);
     this.next().catch(() => undefined);
   };
 
   /** Pause venue du système (interruption, écouteurs) sans passer par pause(). */
   private onNativePause = () => {
-    if (!this.audio.paused) return;
+    if (!this.audio.paused || this.unlocking || this.isSilent()) return;
     if (this.playing && !this.audio.ended) {
       this.playing = false;
       this.wantPlay = false;

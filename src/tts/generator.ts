@@ -34,6 +34,11 @@ export class Generator {
     return this.queued.size > 0;
   }
 
+  /** Vrai si la note est en file ou en cours de génération. */
+  isQueued(noteId: string): boolean {
+    return this.queued.has(noteId);
+  }
+
   onProgress(l: (e: GeneratorEvent) => void): () => void {
     this.listeners.add(l);
     return () => {

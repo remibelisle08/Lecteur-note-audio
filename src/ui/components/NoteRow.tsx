@@ -8,6 +8,8 @@ import { useGeneration } from '../hooks/useGeneration';
 import { useListen } from '../hooks/useListen';
 import { href } from '../routes';
 
+export const STALLED_MESSAGE = 'La génération s’est interrompue.';
+
 export type NoteRowData = { note: Note; chapters: Chapter[]; progress?: Progress };
 
 type Props = NoteRowData & {
@@ -26,7 +28,12 @@ export function NoteRow({ note, chapters, progress, first, last, onMove, onDelet
   const done = new Set(progress?.completedChapterIds ?? []);
   const listened = included.filter((c) => done.has(c.id)).length;
   const hasErrorChapters = included.some((c) => c.audioStatus === 'error');
-  const error = note.status !== 'generating' ? undefined : (gen.error ?? (hasErrorChapters ? CHAPTER_ERROR_MESSAGE : undefined));
+  const generating = note.status === 'generating';
+  // Note « generating » que le générateur ne traite pas (reprise au démarrage échouée, arrêt) : relançable.
+  const stalled = generating && !generator.isQueued(note.id);
+  const error = !generating
+    ? undefined
+    : (gen.error ?? (hasErrorChapters ? CHAPTER_ERROR_MESSAGE : stalled ? STALLED_MESSAGE : undefined));
 
   let status: string;
   if (note.status === 'draft') status = 'Brouillon';

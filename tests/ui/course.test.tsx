@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { chapter, course, fakeGenerator, makeServices, note, openTestLibrary, renderAt } from './helpers';
 import { QUOTA_MESSAGE } from '../../src/tts/generator';
@@ -26,8 +26,10 @@ describe('CourseScreen', () => {
     await lib.saveChapter(chapter('a', 'n1', 0, { audioStatus: 'ready' }));
     await lib.saveChapter(chapter('b', 'n1', 1, { audioStatus: 'generating' }));
     const generator = fakeGenerator();
+    vi.mocked(generator.isQueued).mockReturnValue(true);
     renderAt('#/course/c1', makeServices(lib, { generator }));
     await screen.findByText('Cellule');
+    expect(screen.queryByRole('button', { name: /Réessayer/ })).toBeNull();
 
     act(() => generator.emit({ noteId: 'n1', chapterId: 'b', ratio: 0.5, status: 'generating' }));
     expect(await screen.findByText('Génération… 75 %')).toBeInTheDocument();
@@ -48,5 +50,17 @@ describe('CourseScreen', () => {
     renderAt('#/course/c1', makeServices(lib));
     fireEvent.click(await screen.findByRole('button', { name: 'Monter « ADN »' }));
     await waitFor(async () => expect((await lib.listNotes('c1')).map((n) => n.id)).toEqual(['n2', 'n1']));
+  });
+
+  it('note « generating » que le générateur ne traite pas (reprise échouée) : « Réessayer » proposé', async () => {
+    const lib = await openTestLibrary();
+    await lib.saveCourse(course('c1', 'Biologie'));
+    await lib.saveNote(note('n1', 'c1', { title: 'Cellule', status: 'generating' }));
+    await lib.saveChapter(chapter('a', 'n1', 0, { audioStatus: 'pending' }));
+    const generator = fakeGenerator();
+    renderAt('#/course/c1', makeServices(lib, { generator }));
+    expect(await screen.findByText('La génération s’est interrompue.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Réessayer' }));
+    await waitFor(() => expect(generator.generateNote).toHaveBeenCalledWith('n1'));
   });
 });

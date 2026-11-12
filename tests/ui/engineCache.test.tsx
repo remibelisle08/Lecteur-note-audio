@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+import { act, render, screen } from '@testing-library/react';
 import { EngineCache } from '../../src/ui/engineCache';
+import { App } from '../../src/ui/App';
+import { makeServices, openTestLibrary } from './helpers';
 
 const engine = () => ({ sampleRate: 22050, synthesize: vi.fn(async () => new Float32Array(1)), dispose: vi.fn() });
 
@@ -31,6 +34,30 @@ describe('EngineCache', () => {
     fail = false;
     await cache.get('upmc');
     expect(made).toHaveLength(3);
-    expect(seen).toEqual([0.5, 0.5, 0.5, 0.5]);
+    // L'échec termine l'avancement (1) pour que le bandeau disparaisse.
+    expect(seen).toEqual([0.5, 0.5, 0.5, 1, 0.5]);
+  });
+});
+
+describe('VoiceDownload', () => {
+  it('le bandeau disparaît quand la création du moteur échoue', async () => {
+    let reject!: (e: Error) => void;
+    const cache = new EngineCache((_v, onDownload) => {
+      onDownload(0.4);
+      return new Promise((_r, j) => (reject = j));
+    });
+    const lib = await openTestLibrary();
+    window.location.hash = '#/';
+    render(<App services={makeServices(lib, { getEngine: cache.get, onVoiceDownload: cache.onDownload })} />);
+    let p!: Promise<unknown>;
+    act(() => {
+      p = cache.get('siwis').catch(() => undefined);
+    });
+    expect(screen.getByText('Téléchargement de la voix… 40 %')).toBeInTheDocument();
+    await act(async () => {
+      reject(new Error('réseau'));
+      await p;
+    });
+    expect(screen.queryByText(/Téléchargement de la voix/)).toBeNull();
   });
 });

@@ -15,6 +15,7 @@ describe('MiniPlayer', () => {
     const bar = screen.getByRole('region', { name: 'Lecture en cours' });
     expect(bar).toHaveTextContent('Introduction');
     fireEvent.click(screen.getByRole('button', { name: 'Lecture' }));
+    expect(fake.player.unlock).toHaveBeenCalled();
     expect(fake.player.play).toHaveBeenCalled();
 
     act(() => {

@@ -29,6 +29,7 @@ export function fakePlayer(initial: Partial<PlayerState> = {}) {
   };
   const listeners = new Set<(s: PlayerState) => void>();
   const player: PlayerLike = {
+    unlock: vi.fn(),
     loadNote: vi.fn(async () => undefined),
     loadCourse: vi.fn(async () => undefined),
     play: vi.fn(async () => undefined),
@@ -58,6 +59,7 @@ export function fakeGenerator() {
   const listeners = new Set<(e: GeneratorEvent) => void>();
   const generator: GeneratorLike & { emit(e: GeneratorEvent): void } = {
     busy: false,
+    isQueued: vi.fn(() => false),
     generateNote: vi.fn(async () => undefined),
     onProgress(l) {
       listeners.add(l);

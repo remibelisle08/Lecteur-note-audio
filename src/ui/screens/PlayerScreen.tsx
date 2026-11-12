@@ -10,7 +10,11 @@ export function PlayerScreen() {
   const { player } = useApp();
   const state = usePlayerState();
   const item = state.item;
-  const safe = (p: Promise<unknown>) => void p.catch(() => undefined);
+  /** Changement de chapitre au clic : déverrouille d'abord l'audio (iOS), la lecture suit le chargement. */
+  const safe = (run: () => Promise<unknown>) => {
+    player.unlock();
+    void run().catch(() => undefined);
+  };
 
   if (!item) {
     return (
@@ -63,7 +67,7 @@ export function PlayerScreen() {
       </div>
 
       <div className="transport">
-        <button type="button" className="icon-btn" aria-label="Chapitre précédent" onClick={() => safe(player.prev())}>
+        <button type="button" className="icon-btn" aria-label="Chapitre précédent" onClick={() => safe(() => player.prev())}>
           ⏮
         </button>
         <button type="button" className="icon-btn" aria-label="Reculer de 15 secondes" onClick={() => player.seekBy(-15)}>
@@ -78,7 +82,7 @@ export function PlayerScreen() {
           className="icon-btn"
           aria-label="Chapitre suivant"
           disabled={state.index >= state.queue.length - 1}
-          onClick={() => safe(player.next())}
+          onClick={() => safe(() => player.next())}
         >
           ⏭
         </button>
@@ -104,7 +108,7 @@ export function PlayerScreen() {
                 type="button"
                 className={`list-item${i === state.index ? ' is-current' : ''}`}
                 aria-current={i === state.index ? 'true' : undefined}
-                onClick={() => safe(player.goTo(i))}
+                onClick={() => safe(() => player.goTo(i))}
               >
                 <span className="list-title">{q.title}</span>
                 {manyNotes && <span className="muted">{q.noteTitle}</span>}

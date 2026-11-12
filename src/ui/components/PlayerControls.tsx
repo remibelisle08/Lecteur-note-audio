@@ -5,8 +5,12 @@ import { useApp } from '../AppContext';
 export function usePlayPause(state: PlayerState) {
   const { player } = useApp();
   return () => {
-    if (state.playing) player.pause();
-    else player.play().catch(() => undefined);
+    if (state.playing) {
+      player.pause();
+      return;
+    }
+    player.unlock();
+    player.play().catch(() => undefined);
   };
 }
 

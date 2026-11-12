@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { unlockElement } from '../../player/unlock';
 import { renderChapterToMp3 } from '../../tts/audio';
 import { DOWNLOAD_ERROR, listVoices } from '../../tts/engine';
 import type { Settings } from '../../types';
@@ -11,6 +12,7 @@ const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
 const SAMPLE_TEXT = 'Bonjour ! Voici un aperçu de cette voix pour écouter tes notes de cours.';
 const SAMPLE_BUSY = 'Patiente jusqu’à la fin de la génération pour écouter un échantillon.';
 const SAVE_ERROR = 'Impossible d’enregistrer ce réglage. Réessaie.';
+export const SAMPLE_PLAY_ERROR = 'Impossible de lire l’échantillon.';
 
 function useStorageEstimate(): string | undefined {
   const [text, setText] = useState<string>();
@@ -65,22 +67,32 @@ export function SettingsScreen() {
       notify(SAMPLE_BUSY);
       return;
     }
+    // Élément créé et déverrouillé dans le clic (iOS), avant les secondes de synthèse.
+    sampleAudio.current?.pause();
+    const audio = new Audio();
+    sampleAudio.current = audio;
+    void unlockElement(audio);
     setSampling(true);
+    let blob: Blob;
     try {
       const engine = await getEngine(settings.voiceId);
-      const { blob } = await renderChapterToMp3([{ kind: 'speech', text: SAMPLE_TEXT }], engine);
-      sampleAudio.current?.pause();
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      const release = () => URL.revokeObjectURL(url);
-      audio.addEventListener('ended', release, { once: true });
-      audio.addEventListener('error', release, { once: true });
-      sampleAudio.current = audio;
-      await audio.play();
+      blob = (await renderChapterToMp3([{ kind: 'speech', text: SAMPLE_TEXT }], engine)).blob;
     } catch (err) {
       notify(err instanceof Error && err.message === DOWNLOAD_ERROR ? DOWNLOAD_ERROR : FALLBACK_ERROR);
-    } finally {
       setSampling(false);
+      return;
+    }
+    setSampling(false);
+    if (sampleAudio.current !== audio) return; // un autre échantillon a été demandé
+    const url = URL.createObjectURL(blob);
+    const release = () => URL.revokeObjectURL(url);
+    audio.addEventListener('ended', release, { once: true });
+    audio.src = url;
+    try {
+      await audio.play();
+    } catch {
+      release();
+      notify(SAMPLE_PLAY_ERROR);
     }
   };
 

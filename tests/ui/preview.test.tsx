@@ -39,7 +39,7 @@ describe('PreviewScreen', () => {
 
     await waitFor(() => expect(articles()).toHaveLength(2));
     const text = within(articles()[0]).getByLabelText('Texte du chapitre') as HTMLTextAreaElement;
-    expect(text.value).toBe(`${words(150, 'alpha')}\n\nMembrane\n\n${words(150, 'beta')}`);
+    expect(text.value).toBe(`${words(150, 'alpha')}\n\n## Membrane\n\n${words(150, 'beta')}`);
     await waitFor(async () => {
       const chapters = await lib.listChapters('n1');
       expect(chapters.map((c) => [c.id, c.index])).toEqual([['a', 0], ['c', 1]]);
@@ -101,5 +101,18 @@ describe('PreviewScreen', () => {
     const chapters = await lib.listChapters('n1');
     expect(chapters.map((c) => c.title)).toEqual(['Texte reconnu']);
     expect((await lib.getNote('n1'))?.usedOcr).toBe(true);
+  });
+
+  it('OCR réussi mais enregistrement impossible : message d’enregistrement, pas d’erreur de reconnaissance', async () => {
+    const lib = await setup();
+    const sourceFiles = new Map([['n1', new File(['x'], 'cellule.pdf')]]);
+    const importFile = vi.fn(async () => ({
+      title: 'cellule', usedOcr: true, quizDetected: false,
+      chapters: [{ title: 'Texte reconnu', text: words(20, 'ocr'), included: true, flags: [] }],
+    }));
+    renderAt('#/preview/n1', makeServices({ ...lib, deleteChapter: async () => { throw new Error('idb'); } }, { sourceFiles, importFile }));
+    fireEvent.click(await screen.findByRole('button', { name: /Réessayer avec la reconnaissance de texte/ }));
+    expect(await screen.findByText('Impossible d’enregistrer tes modifications. Réessaie.')).toBeInTheDocument();
+    expect(screen.queryByText(/La reconnaissance du texte a échoué/)).toBeNull();
   });
 });

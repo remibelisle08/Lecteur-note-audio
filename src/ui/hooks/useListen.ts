@@ -10,6 +10,8 @@ export function useListen() {
   const { player, notify } = useApp();
   return useCallback(
     async (target: { noteId: string } | { courseId: string }) => {
+      // Synchrone, avant toute attente : la lecture lancée après le chargement reste autorisée sur iOS.
+      player.unlock();
       try {
         if ('noteId' in target) await player.loadNote(target.noteId);
         else await player.loadCourse(target.courseId);

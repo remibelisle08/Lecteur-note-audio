@@ -45,6 +45,18 @@ async function addNote(lib: Library, noteId: string, titles: { title: string; te
 const gen = (lib: Library, engine: TtsEngine) => new Generator(lib, async () => engine, { createEncoder: fakeEncoder });
 
 describe('Generator', () => {
+  it('isQueued : vrai pendant la génération de la note, faux après', async () => {
+    const lib = await setup([{ title: 'Un', text: 'Alpha.' }]);
+    const { engine } = makeEngine();
+    const g = gen(lib, engine);
+    expect(g.isQueued('n1')).toBe(false);
+    const p = g.generateNote('n1');
+    expect(g.isQueued('n1')).toBe(true);
+    expect(g.isQueued('autre')).toBe(false);
+    await p;
+    expect(g.isQueued('n1')).toBe(false);
+  });
+
   it('génère les chapitres dans l’ordre et passe la note à ready', async () => {
     const lib = await setup([{ title: 'Un', text: 'Alpha.' }, { title: 'Deux', text: 'Beta.' }]);
     const { engine, calls } = makeEngine();

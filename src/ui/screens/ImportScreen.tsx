@@ -1,4 +1,5 @@
 import { useEffect, useState, type DragEvent } from 'react';
+import type { ImportResult } from '../../import';
 import { newId } from '../../library/db';
 import type { Course } from '../../types';
 import { useApp } from '../AppContext';
@@ -9,6 +10,7 @@ import { href, navigate } from '../routes';
 
 const LAST_COURSE_KEY = 'lastCourseId';
 const NEW = '__new__';
+const SAVE_FAILED = 'Impossible d’enregistrer cette note. Réessaie.';
 
 type FileRow = { key: string; name: string; message?: string; ratio?: number; error?: string; noteId?: string; title?: string; usedOcr?: boolean };
 
@@ -47,13 +49,21 @@ export function ImportScreen({ courseId }: { courseId?: string }) {
   const update = (key: string, patch: Partial<FileRow>) =>
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)));
 
+  /**
+   * Cours cible, relu en base au moment d'enregistrer (le choix affiché peut ne pas être encore chargé) :
+   * cours choisi s'il existe, sinon cours du même nom, sinon création.
+   */
   async function resolveCourse(): Promise<string> {
-    if (choice && choice !== NEW) return choice;
-    const name = newName.trim() || DEFAULT_COURSE_NAME;
-    const existing = await lib.listCourses();
-    const course = await lib.saveCourse({ id: newId(), name, order: existing.length, updatedAt: Date.now() });
-    setChoice(course.id);
-    return course.id;
+    const courses = await lib.listCourses();
+    const pick = choice ?? defaultChoice(courses, courseId);
+    if (pick !== NEW && courses.some((c) => c.id === pick)) return pick;
+    const name = (choice === null ? '' : newName.trim()) || DEFAULT_COURSE_NAME;
+    const same = courses.find((c) => c.name === name);
+    const id = same
+      ? same.id
+      : (await lib.saveCourse({ id: newId(), name, order: courses.length, updatedAt: Date.now() })).id;
+    setChoice(id);
+    return id;
   }
 
   async function handleFiles(list: FileList | File[] | null) {
@@ -62,29 +72,32 @@ export function ImportScreen({ courseId }: { courseId?: string }) {
     const batch = files.map((f, i) => ({ file: f, row: { key: `${Date.now()}-${i}-${f.name}`, name: f.name } }));
     setRows(batch.map((b) => b.row));
     setBusy(true);
-    let target: string;
-    try {
-      target = await resolveCourse();
-      writeLastCourse(target);
-    } catch {
-      setRows((rs) => rs.map((r) => ({ ...r, error: 'Impossible de créer le cours. Réessaie.' })));
-      setBusy(false);
-      return;
-    }
+    // Cours créé seulement au premier fichier importé avec succès.
+    let target: string | undefined;
     const saved: string[] = [];
     for (const { file, row } of batch) {
+      let result: ImportResult;
       try {
-        const result = await importFile(file, (message, ratio) => update(row.key, { message, ratio }));
-        if (result.chapters.length === 0) {
-          update(row.key, { error: NO_CHAPTERS, message: undefined });
-          continue;
+        result = await importFile(file, (message, ratio) => update(row.key, { message, ratio }));
+      } catch (err) {
+        update(row.key, { error: importErrorMessage(err), message: undefined });
+        continue;
+      }
+      if (result.chapters.length === 0) {
+        update(row.key, { error: NO_CHAPTERS, message: undefined });
+        continue;
+      }
+      try {
+        if (target === undefined) {
+          target = await resolveCourse();
+          writeLastCourse(target);
         }
         const note = await saveDraft(lib, target, file.name, result);
         sourceFiles.set(note.id, file);
         saved.push(note.id);
         update(row.key, { noteId: note.id, title: note.title, usedOcr: result.usedOcr, message: undefined });
-      } catch (err) {
-        update(row.key, { error: importErrorMessage(err), message: undefined });
+      } catch {
+        update(row.key, { error: SAVE_FAILED, message: undefined });
       }
     }
     setBusy(false);

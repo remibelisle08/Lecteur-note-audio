@@ -1,11 +1,12 @@
 import { useState } from 'react';
+import type { ImportResult } from '../../import';
 import { estimateMinutes } from '../../cleanup/chapters';
 import { useApp } from '../AppContext';
 import { BackLink } from '../components/BackLink';
 import { ChapterEditor } from '../components/ChapterEditor';
 import { NO_CHAPTERS, OCR_TIP, importErrorMessage } from '../drafts';
 import { FALLBACK_ERROR } from '../format';
-import { useDraft } from '../hooks/useDraft';
+import { SAVE_ERROR, useDraft } from '../hooks/useDraft';
 import { href, navigate } from '../routes';
 
 export function PreviewScreen({ noteId }: { noteId: string }) {
@@ -42,16 +43,23 @@ export function PreviewScreen({ noteId }: { noteId: string }) {
   const retryOcr = async () => {
     if (!file) return;
     setOcr({ busy: true, message: 'Reconnaissance du texte…' });
+    let result: ImportResult;
     try {
-      const result = await importFile(file, (message) => setOcr({ busy: true, message }), { forceOcr: true });
-      if (result.chapters.length === 0) {
-        setOcr({ busy: false, error: NO_CHAPTERS });
-        return;
-      }
-      await draft.replaceChapters(result);
-      setOcr({ busy: false });
+      result = await importFile(file, (message) => setOcr({ busy: true, message }), { forceOcr: true });
     } catch (err) {
       setOcr({ busy: false, error: importErrorMessage(err) });
+      return;
+    }
+    if (result.chapters.length === 0) {
+      setOcr({ busy: false, error: NO_CHAPTERS });
+      return;
+    }
+    try {
+      await draft.replaceChapters(result);
+      setOcr({ busy: false });
+    } catch {
+      // Échec d'enregistrement (bibliothèque), pas de la reconnaissance de texte.
+      setOcr({ busy: false, error: SAVE_ERROR });
     }
   };
 

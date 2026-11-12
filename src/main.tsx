@@ -26,7 +26,8 @@ async function start() {
   }
   const services = createServices(lib);
   // Reprise des générations interrompues : en tâche de fond, le rendu n'attend pas la fin des générations.
-  services.generator.resumeAll().catch(() => undefined);
+  // En cas d'échec, les notes restent « generating » : le cours propose alors « Réessayer ».
+  services.generator.resumeAll().catch((err: unknown) => console.error('Reprise des générations impossible', err));
   render(<App services={services} />);
 }
 

@@ -13,10 +13,10 @@ export type ImportFn = (
   opts?: { forceOcr?: boolean },
 ) => Promise<ImportResult>;
 
-export type GeneratorLike = Pick<Generator, 'generateNote' | 'onProgress' | 'busy'>;
+export type GeneratorLike = Pick<Generator, 'generateNote' | 'onProgress' | 'busy' | 'isQueued'>;
 export type PlayerLike = Pick<
   PlayerController,
-  'loadNote' | 'loadCourse' | 'play' | 'pause' | 'seekBy' | 'seekTo' | 'next' | 'prev' | 'goTo' | 'setRate' | 'subscribe'
+  'unlock' | 'loadNote' | 'loadCourse' | 'play' | 'pause' | 'seekBy' | 'seekTo' | 'next' | 'prev' | 'goTo' | 'setRate' | 'subscribe'
 >;
 
 /** Services de l'application, créés une seule fois au démarrage (voir services.ts). */

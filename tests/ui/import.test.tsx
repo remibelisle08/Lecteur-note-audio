@@ -67,4 +67,35 @@ describe('ImportScreen', () => {
     expect(sourceFiles.get(id)).toBe(file);
     expect((await lib.listChapters(id))[0].flags).toEqual(['has-quiz']);
   });
+
+  it('aucun fichier importé : aucun cours créé', async () => {
+    const lib = await openTestLibrary();
+    const importFile = vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    renderAt('#/import', makeServices(lib, { importFile }));
+    await screen.findByRole('option', { name: 'Nouveau cours…' });
+    pick([new File(['1'], 'a.pdf')]);
+    await screen.findByText('La reconnaissance du texte a échoué. Vérifie ta connexion et réessaie.');
+    expect(await lib.listCourses()).toEqual([]);
+  });
+
+  it('choix pas encore chargé : réutilise « Mes notes » existant au lieu d’en créer un second', async () => {
+    const lib = await openTestLibrary();
+    await lib.saveCourse({ id: 'mes', name: 'Mes notes', order: 0, updatedAt: 0 });
+    let calls = 0;
+    const slowLib = {
+      ...lib,
+      listCourses: () => (calls++ === 0 ? new Promise<never>(() => undefined) : lib.listCourses()),
+    };
+    const importFile = vi.fn(async () => ({
+      title: 'Cellule', usedOcr: false, quizDetected: false,
+      chapters: [{ title: 'Intro', text: words(10), included: true, flags: [] }],
+    }));
+    renderAt('#/import', makeServices(slowLib, { importFile }));
+    pick([new File(['1'], 'cellule.pdf')]);
+    await waitFor(() => expect(window.location.hash).toMatch(/^#\/preview\//));
+    expect((await lib.listCourses()).map((c) => c.id)).toEqual(['mes']);
+    expect(await lib.listNotes('mes')).toHaveLength(1);
+  });
 });

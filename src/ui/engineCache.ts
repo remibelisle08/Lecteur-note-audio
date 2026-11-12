@@ -21,6 +21,8 @@ export class EngineCache {
     this.current = entry;
     engine.catch(() => {
       if (this.current === entry) this.current = undefined;
+      // Téléchargement abandonné : le bandeau d'avancement doit disparaître.
+      this.downloadListeners.forEach((l) => l(1));
     });
     return engine;
   };

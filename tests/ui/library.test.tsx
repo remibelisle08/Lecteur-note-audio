@@ -26,6 +26,11 @@ describe('LibraryScreen', () => {
     expect(screen.getByRole('link', { name: 'Réglages' })).toHaveAttribute('href', '#/settings');
 
     fireEvent.click(screen.getByRole('button', { name: /Reprendre ADN/ }));
+    // Déverrouillage audio (iOS) synchrone dans le clic, avant le chargement.
+    expect(player.unlock).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(player.unlock).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(player.loadNote).mock.invocationCallOrder[0],
+    );
     await waitFor(() => expect(player.loadNote).toHaveBeenCalledWith('n2'));
     await waitFor(() => expect(player.play).toHaveBeenCalled());
     await waitFor(() => expect(window.location.hash).toBe('#/player'));

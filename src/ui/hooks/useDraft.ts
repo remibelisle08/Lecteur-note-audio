@@ -97,14 +97,16 @@ export function useDraft(noteId: string) {
     if (immediate) void run(key);
   };
 
-  /** Fusionne le chapitre `i` avec le suivant (titre du suivant gardé dans le texte). */
+  /** Fusionne le chapitre `i` avec le suivant (titre du suivant gardé dans le texte, en intertitre). */
   const mergeWithNext = async (i: number) => {
     await flush();
     const list = chaptersRef.current;
     const a = list[i];
     const b = list[i + 1];
     if (!a || !b) return;
-    const text = [a.text, b.title, b.text].filter((t) => t.trim()).join('\n\n');
+    // Le titre du suivant devient un intertitre « ## » (pause de section à la lecture).
+    const heading = b.title.trim() ? `## ${b.title.trim()}` : '';
+    const text = [a.text, heading, b.text].filter((t) => t.trim()).join('\n\n');
     const flags = [...new Set([...(a.flags ?? []), ...(b.flags ?? [])])];
     const rest = list
       .filter((c) => c.id !== b.id)
