@@ -191,6 +191,49 @@ describe('PlayerController', () => {
     ctrl.dispose();
   });
 
+  it('après une erreur de chargement : source vidée, play() retente le chargement', async () => {
+    await seedNote('n1', 1);
+    await lib.saveChapter(chapter('n1-1', 'n1', 1, { audioDriveId: 'drv' }));
+    let fail = true;
+    const ctrl = mk(async () => {
+      if (fail) throw new Error('hors ligne');
+      return blob();
+    });
+    await ctrl.loadNote('n1');
+    await ctrl.play();
+    audio.currentTime = 40;
+    await ctrl.next();
+    await flush();
+    expect(last(ctrl).error).toBeDefined();
+    expect(audio.src).toBe('');
+    expect(created.length).toBe(revoked.length);
+    const pr = await lib.getProgress('n1');
+    expect(pr?.chapterIndex === 1 && pr.positionSec === 40).toBe(false);
+    fail = false;
+    await ctrl.play();
+    await flush();
+    const s = last(ctrl);
+    expect(s.error).toBeUndefined();
+    expect(s.index).toBe(1);
+    expect(s.playing).toBe(true);
+    expect(audio.src).not.toBe('');
+    ctrl.dispose();
+  });
+
+  it('un abonné qui lève une exception n’est pas pris pour une erreur de chargement', async () => {
+    await seedNote('n1', 1);
+    const ctrl = mk();
+    let calls = 0;
+    ctrl.subscribe(() => {
+      if (calls++ > 0) throw new Error('boum');
+    });
+    await ctrl.loadNote('n1');
+    await flush();
+    expect(last(ctrl).error).toBeUndefined();
+    expect(audio.src).not.toBe('');
+    ctrl.dispose();
+  });
+
   it('utilise removeAttribute(src) + load() quand le chapitre n’est pas prêt', async () => {
     await lib.saveNote(note('n1'));
     await lib.saveChapter(chapter('n1-0', 'n1', 0, { audioStatus: 'pending' }));

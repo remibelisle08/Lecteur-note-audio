@@ -215,6 +215,8 @@ export class PlayerController {
       this.playing = false;
       this.wantPlay = false;
       this.waiting = false;
+      this.releaseUrl();
+      this.clearSource();
       this.error = LOAD_ERROR;
       this.emit();
     }
@@ -259,6 +261,10 @@ export class PlayerController {
     this.wantPlay = true;
     if (this.waiting || this.queue.length === 0) {
       this.emit();
+      return;
+    }
+    if (this.error) {
+      await this.loadIndex(this.index, 0, ++this.token);
       return;
     }
     await this.startPlayback(this.token);
@@ -409,7 +415,7 @@ export class PlayerController {
       const next: Progress = {
         noteId: ch.noteId,
         chapterIndex: ch.index,
-        positionSec: this.waiting ? 0 : this.audio.currentTime || 0,
+        positionSec: this.waiting || this.error ? 0 : this.audio.currentTime || 0,
         completedChapterIds: prev?.completedChapterIds ?? [],
         updatedAt: Date.now(),
       };
@@ -456,6 +462,12 @@ export class PlayerController {
   private emit() {
     if (this.listeners.size === 0) return;
     const s = this.state();
-    this.listeners.forEach((l) => l(s));
+    this.listeners.forEach((l) => {
+      try {
+        l(s);
+      } catch {
+        /* un abonné défaillant ne doit pas perturber le lecteur */
+      }
+    });
   }
 }
