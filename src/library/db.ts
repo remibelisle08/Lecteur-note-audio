@@ -168,9 +168,14 @@ export async function openLibrary(name = 'lecteur-notes'): Promise<Library> {
     async putAudio(chapterId, blob) {
       const data = await readBlob(blob);
       const tx = rw();
-      await tx.objectStore('audio').put({ chapterId, type: blob.type, data });
       const ch = await tx.objectStore('chapters').get(chapterId);
-      if (ch) await tx.objectStore('chapters').put({ ...ch, audioLocal: true });
+      // Chapitre supprimé entre-temps (note ou cours effacé pendant la génération) : rien n'est stocké.
+      if (!ch) {
+        await tx.done;
+        return;
+      }
+      await tx.objectStore('audio').put({ chapterId, type: blob.type, data });
+      await tx.objectStore('chapters').put({ ...ch, audioLocal: true });
       await tx.done;
       emit('library');
     },

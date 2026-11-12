@@ -194,4 +194,47 @@ describe('Generator', () => {
     expect(fn.mock.calls.some(([e]) => e.status === 'generating')).toBe(true);
     expect(fn.mock.calls.at(-1)![0]).toMatchObject({ status: 'ready', ratio: 1 });
   });
+  it('note supprimée pendant la génération : arrêt, aucun chapitre ni audio ressuscité, marqueur retiré', async () => {
+    const lib = await setup([{ title: 'A', text: 'Alpha.' }, { title: 'B', text: 'Beta.' }, { title: 'C', text: 'Gamma.' }]);
+    const ids = (await lib.listChapters('n1')).map((c) => c.id);
+    const calls: string[] = [];
+    let deleted = false;
+    const engine: TtsEngine = {
+      sampleRate: 22050,
+      async synthesize(text) {
+        calls.push(text);
+        if (!deleted) {
+          deleted = true;
+          await lib.deleteNote('n1');
+        }
+        return new Float32Array(2205);
+      },
+    };
+    await gen(lib, engine).generateNote('n1');
+    expect(calls.some((c) => c.includes('Beta') || c.includes('Gamma'))).toBe(false);
+    expect(await lib.getNote('n1')).toBeUndefined();
+    expect(await lib.listChapters('n1')).toEqual([]);
+    for (const id of ids) expect(await lib.getAudio(id)).toBeUndefined();
+    expect(await lib.listLocalGenerations()).toEqual([]);
+  });
+
+  it('cours supprimé pendant la génération : la note suivante en file n’est pas générée', async () => {
+    const lib = await setup([{ title: 'A', text: 'Alpha.' }]);
+    await addNote(lib, 'n2', [{ title: 'B', text: 'Beta.' }], 2);
+    const calls: string[] = [];
+    const engine: TtsEngine = {
+      sampleRate: 22050,
+      async synthesize(text) {
+        calls.push(text);
+        if (calls.length === 1) await lib.deleteCourse('c1');
+        return new Float32Array(2205);
+      },
+    };
+    const g = gen(lib, engine);
+    await Promise.all([g.generateNote('n1'), g.generateNote('n2')]);
+    expect(calls.some((c) => c.includes('Beta'))).toBe(false);
+    expect(await lib.listChapters('n1')).toEqual([]);
+    expect(await lib.getAudio('n1-c0')).toBeUndefined();
+    expect(await lib.listLocalGenerations()).toEqual([]);
+  });
 });

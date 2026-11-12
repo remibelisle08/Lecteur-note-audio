@@ -90,15 +90,21 @@ export class Generator {
     for (const ch of chapters) if (!ch.included) await lib.deleteChapter(ch.id);
     chapters = chapters.filter((c) => c.included);
     for (let i = 0; i < chapters.length; i++) {
-      if (chapters[i].index !== i) chapters[i] = await lib.saveChapter({ ...chapters[i], index: i });
+      if (chapters[i].index !== i) {
+        const saved = await this.saveIfPresent({ ...chapters[i], index: i });
+        if (!saved) return this.abandon(noteId);
+        chapters[i] = saved;
+      }
     }
 
-    await lib.saveNote({ ...(await lib.getNote(noteId))!, status: 'generating' });
+    const fresh = await lib.getNote(noteId);
+    if (!fresh) return this.abandon(noteId);
+    await lib.saveNote({ ...fresh, status: 'generating' });
 
     // Un chapitre avec audio sur Drive (téléversé une fois prêt, sur un autre appareil) n'est pas régénéré :
     // il est prêt, le lecteur le télécharge au besoin.
     for (const c of chapters) {
-      if (c.audioDriveId && c.audioStatus !== 'ready') await lib.saveChapter({ ...c, audioStatus: 'ready' });
+      if (c.audioDriveId && c.audioStatus !== 'ready') await this.saveIfPresent({ ...c, audioStatus: 'ready' });
     }
     const todo = chapters.filter((c) => c.audioStatus !== 'ready' && !c.audioDriveId);
     if (todo.length > 0) {
@@ -112,17 +118,36 @@ export class Generator {
         return;
       }
       for (const ch of todo) {
+        // Note (ou cours) supprimée pendant la génération : on s'arrête sans rien réécrire.
+        if (!(await lib.getNote(noteId))) return this.abandon(noteId);
         const outcome = await this.generateChapter(noteId, ch, engine, note.quizMode, settings);
         if (outcome === 'quota') return;
+        if (outcome === 'gone') return this.abandon(noteId);
       }
     }
 
+    const cur = await lib.getNote(noteId);
+    if (!cur) return this.abandon(noteId);
     const final = await lib.listChapters(noteId);
     if (final.every((c) => c.audioStatus === 'ready')) {
-      const cur = await lib.getNote(noteId);
-      if (cur) await lib.saveNote({ ...cur, status: 'ready' });
+      await lib.saveNote({ ...cur, status: 'ready' });
       await lib.setLocalGeneration(noteId, false);
     }
+  }
+
+  private async abandon(noteId: string): Promise<void> {
+    await this.lib.setLocalGeneration(noteId, false);
+  }
+
+  /** Version stockée du chapitre, ou undefined s'il a été supprimé. */
+  private async stored(ch: Chapter): Promise<Chapter | undefined> {
+    return (await this.lib.listChapters(ch.noteId)).find((c) => c.id === ch.id);
+  }
+
+  /** Écrit le chapitre seulement si sa ligne existe encore (jamais de résurrection d'un chapitre supprimé). */
+  private async saveIfPresent(ch: Chapter): Promise<Chapter | undefined> {
+    if (!(await this.stored(ch))) return undefined;
+    return this.lib.saveChapter(ch);
   }
 
   private async generateChapter(
@@ -131,9 +156,11 @@ export class Generator {
     engine: TtsEngine,
     quizMode: boolean,
     settings: { quizPauseSec: number; readPauseInstruction: boolean },
-  ): Promise<'ok' | 'error' | 'quota'> {
+  ): Promise<'ok' | 'error' | 'quota' | 'gone'> {
     const lib = this.lib;
-    let current = await lib.saveChapter({ ...ch, audioStatus: 'generating' });
+    const started = await this.stored(ch);
+    if (!started) return 'gone';
+    await lib.saveChapter({ ...started, audioStatus: 'generating' });
     this.emit({ noteId, chapterId: ch.id, ratio: 0, status: 'generating' });
     try {
       const segments = buildSegments(
@@ -147,15 +174,17 @@ export class Generator {
         this.renderDeps,
       );
       await lib.putAudio(ch.id, blob);
-      // putAudio a mis audioLocal à jour : on repart de la version stockée.
-      current = (await lib.listChapters(noteId)).find((c) => c.id === ch.id) ?? current;
+      // putAudio a mis audioLocal à jour : on repart de la version stockée (absente = chapitre supprimé).
+      const current = await this.stored(ch);
+      if (!current) return 'gone';
       await lib.saveChapter({ ...current, audioStatus: 'ready', durationSec });
       this.emit({ noteId, chapterId: ch.id, ratio: 1, status: 'ready' });
       return 'ok';
     } catch (err) {
       const quota = isQuota(err);
       const message = quota ? QUOTA_MESSAGE : CHAPTER_ERROR_MESSAGE;
-      const latest = (await lib.listChapters(noteId)).find((c) => c.id === ch.id) ?? current;
+      const latest = await this.stored(ch);
+      if (!latest) return 'gone';
       await lib.saveChapter({ ...latest, audioStatus: 'error' });
       this.emit({ noteId, chapterId: ch.id, ratio: 0, status: 'error', message });
       return quota ? 'quota' : 'error';

@@ -60,6 +60,15 @@ describe('library', () => {
     expect(await lib.getAudio('k1')).toBeUndefined();
   });
 
+  it('putAudio sans ligne de chapitre : aucun audio stocké', async () => {
+    let events = 0;
+    lib.onChange(() => events++);
+    await lib.putAudio('fantome', blob());
+    expect(await lib.getAudio('fantome')).toBeUndefined();
+    expect(await lib.listChapters('n1')).toEqual([]);
+    expect(events).toBe(0);
+  });
+
   it('deleteNote cascade chapitres, audio, progression + tombstones', async () => {
     await lib.saveNote(note('n1'));
     await lib.saveChapter(chapter('k1', 'n1', 0));
