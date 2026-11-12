@@ -16,7 +16,8 @@ export default defineConfig({
     },
   },
   webServer: {
-    command: 'npm run build && npx vite preview --port 4173 --strictPort',
+    // En CI, on réutilise le dist de l'étape de build (avec VITE_GOOGLE_CLIENT_ID) : pas de reconstruction.
+    command: `${process.env.CI ? '' : 'npm run build && '}npx vite preview --port 4173 --strictPort`,
     url: 'http://localhost:4173/Lecteur-note-audio/',
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,
