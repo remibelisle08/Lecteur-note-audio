@@ -15,7 +15,9 @@ export function MiniPlayer() {
       <div className="mini-progress" style={{ width: `${ratio * 100}%` }} aria-hidden="true" />
       <a className="mini-info" href={href({ name: 'player' })} aria-label={`Ouvrir le lecteur : ${item.title}`}>
         <span className="mini-title">{item.title}</span>
-        <span className="mini-sub">{item.noteTitle}</span>
+        <span className="mini-sub">
+          {state.unavailable ?? (state.waitingForAudio ? 'En cours de génération…' : item.noteTitle)}
+        </span>
       </a>
       <button type="button" className="icon-btn" aria-label="Reculer de 15 secondes" onClick={() => player.seekBy(-15)}>
         −15

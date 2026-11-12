@@ -19,7 +19,10 @@ export type PlayerState = {
   position: number;
   duration: number;
   rate: number;
+  /** Vrai seulement quand le chapitre courant est en attente de génération (pending / generating). */
   waitingForAudio: boolean;
+  /** Message quand l'audio du chapitre ne peut pas être lu (hors ligne sans copie locale, génération échouée). */
+  unavailable?: string;
   error?: string;
 };
 
@@ -29,16 +32,20 @@ const RESTART_THRESHOLD_SEC = 3;
 const MIN_RATE = 0.75;
 const MAX_RATE = 2;
 const LOAD_ERROR = 'Impossible de charger ce chapitre. Vérifie ta connexion.';
+export const UNAVAILABLE_OFFLINE = 'Audio non disponible hors ligne. Reconnecte-toi ou télécharge-le d’abord.';
+export const UNAVAILABLE_FAILED = 'La génération de ce chapitre a échoué.';
 
 /**
  * Source audio du chapitre courant :
  * - idle : aucune file ; loading : blob en cours de résolution ; ready : source installée ;
- * - waiting : audio pas encore généré ; error : chargement échoué.
+ * - waiting : audio pas encore généré (pending / generating) ;
+ * - unavailable : chapitre prêt sans audio local ni téléchargement possible, ou génération en échec ;
+ * - error : lecture locale (IndexedDB) échouée.
  * Seul le chargement portant le jeton courant modifie `status` ; le jeton n'est incrémenté que
  * juste avant un nouveau chargement (ou dispose), donc un chargement périmé a toujours un successeur
  * qui possède l'état.
  */
-type SourceStatus = 'idle' | 'loading' | 'ready' | 'waiting' | 'error';
+type SourceStatus = 'idle' | 'loading' | 'ready' | 'waiting' | 'unavailable' | 'error';
 
 export class PlayerController {
   private queue: QueueItem[] = [];
@@ -77,7 +84,7 @@ export class PlayerController {
     audio.addEventListener('pause', this.onNativePause);
     audio.addEventListener('durationchange', this.onTimeUpdate);
     this.unsubLib = lib.onChange((kind) => {
-      if (kind === 'library' && this.status === 'waiting') void this.retryWaiting();
+      if (kind === 'library' && (this.status === 'waiting' || this.status === 'unavailable')) void this.retryWaiting();
     });
   }
 
@@ -113,7 +120,8 @@ export class PlayerController {
     this.wantPlay = false;
     await this.ensureRate();
     const course = (await this.lib.listCourses()).find((c) => c.id === courseId);
-    const notes = await this.lib.listNotes(courseId);
+    // Les brouillons (jamais générés) n'ont pas d'audio : ils ne font pas partie de la file du cours.
+    const notes = (await this.lib.listNotes(courseId)).filter((n) => n.status !== 'draft');
     const groups: { noteTitle: string; courseName: string; chapters: Chapter[] }[] = [];
     const progs: Progress[] = [];
     for (const note of notes) {
@@ -181,14 +189,33 @@ export class PlayerController {
     return Math.min(MAX_RATE, Math.max(MIN_RATE, rounded));
   }
 
+  /** Blob du chapitre : local, sinon téléchargé. Un téléchargement échoué (hors ligne) donne undefined. */
   private async resolveBlob(ch: Chapter): Promise<Blob | undefined> {
     if (ch.audioStatus !== 'ready') return undefined;
     let blob = await this.lib.getAudio(ch.id);
     if (!blob && ch.audioDriveId && this.fetchRemoteAudio) {
-      blob = await this.fetchRemoteAudio(ch);
+      try {
+        blob = await this.fetchRemoteAudio(ch);
+      } catch {
+        return undefined;
+      }
       if (blob) await this.lib.putAudio(ch.id, blob);
     }
     return blob;
+  }
+
+  /** Version stockée du chapitre (la file peut être périmée : génération terminée ou échouée depuis). */
+  private async refreshChapter(i: number): Promise<Chapter> {
+    const cur = this.chapters[i];
+    const fresh = (await this.lib.listChapters(cur.noteId)).find((c) => c.id === cur.id);
+    if (fresh) this.chapters[i] = fresh;
+    return fresh ?? cur;
+  }
+
+  /** Premier chapitre lisible (non en échec) à partir de `from`, ou -1. */
+  private nextPlayable(from: number): number {
+    for (let i = from; i < this.chapters.length; i++) if (this.chapters[i].audioStatus !== 'error') return i;
+    return -1;
   }
 
   /** Charge le chapitre `i` à `startPos` ; `my` est le jeton de la demande (les chargements périmés sont abandonnés). */
@@ -206,8 +233,10 @@ export class PlayerController {
     this.pendingPos = startPos;
     let blob: Blob | undefined;
     let failed = false;
+    let ch = this.chapters[i];
     try {
-      blob = await this.resolveBlob(this.chapters[i]);
+      ch = await this.refreshChapter(i);
+      blob = await this.resolveBlob(ch);
     } catch {
       failed = true;
     }
@@ -215,9 +244,17 @@ export class PlayerController {
     this.releaseUrl();
     if (!blob) {
       this.clearSource();
-      this.status = failed ? 'error' : 'waiting';
-      if (failed) this.wantPlay = false;
+      if (failed) {
+        this.status = 'error';
+        this.wantPlay = false;
+      } else if (ch.audioStatus === 'pending' || ch.audioStatus === 'generating') {
+        this.status = 'waiting';
+      } else {
+        this.status = 'unavailable';
+      }
       this.emit();
+      // Lecture en cours (enchaînement, écran verrouillé) : on passe au prochain chapitre lisible.
+      if (this.status === 'unavailable' && this.wantPlay) await this.skipFrom(i + 1, my);
       return;
     }
     this.objectUrl = URL.createObjectURL(blob);
@@ -235,6 +272,25 @@ export class PlayerController {
     await started;
   }
 
+  /** Saute au prochain chapitre lisible à partir de `from` ; s'il n'y en a pas, arrête la lecture. */
+  private async skipFrom(from: number, my: number): Promise<void> {
+    if (my !== this.token) return;
+    const j = this.nextPlayable(from);
+    if (j < 0) {
+      this.stopPlaying();
+      return;
+    }
+    ++this.request;
+    await this.loadIndex(j, 0, ++this.token);
+  }
+
+  private stopPlaying() {
+    this.wantPlay = false;
+    this.playing = false;
+    this.stopTimer();
+    this.emit();
+  }
+
   private onMetadata(my: number) {
     if (my !== this.token || this.pendingPos === undefined) return;
     if (this.audio.currentTime !== this.pendingPos) this.audio.currentTime = this.pendingPos;
@@ -247,11 +303,15 @@ export class PlayerController {
     this.audio.load();
   }
 
-  /** Audio en attente : relit le chapitre et le charge s'il est devenu prêt, à la position voulue. */
+  /**
+   * Audio en attente ou indisponible : relit le chapitre et le recharge, à la position voulue, s'il a changé
+   * (génération terminée ou échouée, audio téléchargé, chapitre relancé).
+   */
   private async retryWaiting() {
     const my = this.token;
+    const status = this.status;
     const cur = this.chapters[this.index];
-    if (this.status !== 'waiting' || !cur) return;
+    if ((status !== 'waiting' && status !== 'unavailable') || !cur) return;
     let fresh: Chapter | undefined;
     try {
       fresh = (await this.lib.listChapters(cur.noteId)).find((c) => c.id === cur.id);
@@ -259,9 +319,13 @@ export class PlayerController {
       return;
     }
     // Une autre relance (ou un autre chargement) a pu passer entre-temps.
-    if (!fresh || my !== this.token || this.status !== 'waiting') return;
+    if (!fresh || my !== this.token || this.status !== status) return;
     this.chapters[this.index] = fresh;
-    if (fresh.audioStatus === 'ready') await this.loadIndex(this.index, this.pendingPos ?? 0, my);
+    const changed =
+      status === 'waiting'
+        ? fresh.audioStatus === 'ready' || fresh.audioStatus === 'error'
+        : fresh.audioStatus !== cur.audioStatus || (fresh.audioLocal && !cur.audioLocal);
+    if (changed) await this.loadIndex(this.index, this.pendingPos ?? 0, my);
   }
 
   // ---------- commandes ----------
@@ -292,7 +356,7 @@ export class PlayerController {
   async play(): Promise<void> {
     this.wantPlay = true;
     if (this.status === 'ready') return this.startPlayback(this.token);
-    if (this.status === 'error') {
+    if (this.status === 'error' || this.status === 'unavailable') {
       ++this.request;
       return this.loadIndex(this.index, this.pendingPos ?? 0, ++this.token);
     }
@@ -338,7 +402,9 @@ export class PlayerController {
   }
 
   async next(): Promise<void> {
-    if (this.index + 1 >= this.queue.length) {
+    // En lecture (enchaînement automatique, écran verrouillé), les chapitres en échec sont sautés.
+    const target = this.wantPlay ? this.nextPlayable(this.index + 1) : this.index + 1;
+    if (target < 0 || target >= this.queue.length) {
       this.wantPlay = false;
       this.playing = false;
       this.stopTimer();
@@ -346,7 +412,7 @@ export class PlayerController {
       this.emit();
       return;
     }
-    await this.goTo(this.index + 1);
+    await this.goTo(target);
   }
 
   async prev(): Promise<void> {
@@ -497,6 +563,8 @@ export class PlayerController {
       duration: this.pendingPos === undefined && Number.isFinite(d) && d > 0 ? d : (ch?.durationSec ?? 0),
       rate: this.rate,
       waitingForAudio: this.status === 'waiting',
+      unavailable:
+        this.status === 'unavailable' ? (ch?.audioStatus === 'error' ? UNAVAILABLE_FAILED : UNAVAILABLE_OFFLINE) : undefined,
       error: this.status === 'error' ? LOAD_ERROR : undefined,
     };
   }

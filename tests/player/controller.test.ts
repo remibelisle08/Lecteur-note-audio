@@ -82,6 +82,7 @@ const chapter = (id: string, noteId: string, index: number, over: Partial<Chapte
   id, noteId, index, title: 'Ch ' + id, text: 'texte', included: true,
   audioStatus: 'ready', audioLocal: false, updatedAt: 0, ...over,
 });
+const UNAVAILABLE = 'Audio non disponible hors ligne. Reconnecte-toi ou télécharge-le d’abord.';
 const blob = () => new Blob([new Uint8Array([1, 2, 3])], { type: 'audio/mpeg' });
 
 async function seedNote(id: string, count: number, courseId = 'c1', order = 0) {
@@ -191,7 +192,7 @@ describe('PlayerController', () => {
     ctrl.dispose();
   });
 
-  it('échec de fetchRemoteAudio : error exposée, pas de rejet non géré', async () => {
+  it('échec de fetchRemoteAudio : audio indisponible exposé, pas de rejet non géré', async () => {
     await seedNote('n1', 1);
     await lib.saveNote(note('n2'));
     await lib.saveChapter(chapter('n2-0', 'n2', 0, { audioDriveId: 'drv' }));
@@ -207,11 +208,12 @@ describe('PlayerController', () => {
     expect(s.index).toBe(1);
     expect(s.playing).toBe(false);
     expect(s.waitingForAudio).toBe(false);
-    expect(s.error).toBe('Impossible de charger ce chapitre. Vérifie ta connexion.');
+    expect(s.error).toBeUndefined();
+    expect(s.unavailable).toBe(UNAVAILABLE);
     ctrl.dispose();
   });
 
-  it('après une erreur de chargement : source vidée, play() retente le chargement', async () => {
+  it('après un audio indisponible : source vidée, play() retente le chargement', async () => {
     await seedNote('n1', 1);
     await lib.saveChapter(chapter('n1-1', 'n1', 1, { audioDriveId: 'drv' }));
     let fail = true;
@@ -224,7 +226,7 @@ describe('PlayerController', () => {
     audio.currentTime = 40;
     await ctrl.next();
     await flush();
-    expect(last(ctrl).error).toBeDefined();
+    expect(last(ctrl).unavailable).toBe(UNAVAILABLE);
     expect(audio.src).toBe('');
     expect(created.length).toBe(revoked.length);
     const pr = await lib.getProgress('n1');
@@ -233,7 +235,7 @@ describe('PlayerController', () => {
     await ctrl.play();
     await flush();
     const s = last(ctrl);
-    expect(s.error).toBeUndefined();
+    expect(s.unavailable).toBeUndefined();
     expect(s.index).toBe(1);
     expect(s.playing).toBe(true);
     expect(audio.src).not.toBe('');
@@ -525,6 +527,98 @@ describe('PlayerController', () => {
     const ctrl = mk();
     await ctrl.loadCourse('c1');
     expect(last(ctrl).index).toBe(2);
+    ctrl.dispose();
+  });
+
+  it('loadCourse exclut les notes brouillon', async () => {
+    await lib.saveNote({ ...note('nd', 'c1', 0), status: 'draft' });
+    await lib.saveChapter(chapter('nd-0', 'nd', 0, { audioStatus: 'pending' }));
+    await seedNote('nb', 1, 'c1', 1);
+    const ctrl = mk();
+    await ctrl.loadCourse('c1');
+    await flush();
+    const s = last(ctrl);
+    expect(s.queue.map((q) => q.chapterId)).toEqual(['nb-0']);
+    expect(s.waitingForAudio).toBe(false);
+    expect(audio.src).toMatch(/^blob:/);
+    ctrl.dispose();
+  });
+
+  it('enchaînement automatique : un chapitre en erreur au milieu de la file est sauté', async () => {
+    await seedNote('na', 1, 'c1', 0);
+    await lib.saveChapter(chapter('na-1', 'na', 1, { audioStatus: 'error' }));
+    await seedNote('nb', 1, 'c1', 1);
+    const ctrl = mk();
+    await ctrl.loadCourse('c1');
+    await ctrl.play();
+    audio.dispatchEvent(new Event('ended'));
+    await flush();
+    const s = last(ctrl);
+    expect(s.item?.chapterId).toBe('nb-0');
+    expect(s.playing).toBe(true);
+    ctrl.dispose();
+  });
+
+  it('enchaînement automatique : un reste fait seulement de chapitres en erreur arrête proprement', async () => {
+    await seedNote('n1', 1);
+    await lib.saveChapter(chapter('n1-1', 'n1', 1, { audioStatus: 'error' }));
+    await lib.saveChapter(chapter('n1-2', 'n1', 2, { audioStatus: 'error' }));
+    const ctrl = mk();
+    await ctrl.loadNote('n1');
+    await ctrl.play();
+    audio.dispatchEvent(new Event('ended'));
+    await flush();
+    const s = last(ctrl);
+    expect(s.playing).toBe(false);
+    expect(s.waitingForAudio).toBe(false);
+    expect(audio.play).toHaveBeenCalledTimes(1);
+    await ctrl.play();
+    await flush();
+    expect(last(ctrl).waitingForAudio).toBe(false);
+    ctrl.dispose();
+  });
+
+  it('chapitre prêt sans audio, hors ligne : indisponible (pas « en génération ») puis enchaîne', async () => {
+    await seedNote('n1', 1);
+    await lib.saveChapter(chapter('n1-1', 'n1', 1, { audioDriveId: 'drv' }));
+    await lib.saveChapter(chapter('n1-2', 'n1', 2));
+    await lib.putAudio('n1-2', blob());
+    const fetchRemote = vi.fn(async () => undefined);
+    const ctrl = mk(fetchRemote);
+    await ctrl.loadNote('n1');
+    await ctrl.goTo(1);
+    await flush();
+    let s = last(ctrl);
+    expect(s.waitingForAudio).toBe(false);
+    expect(s.unavailable).toBe(UNAVAILABLE);
+    expect(s.index).toBe(1);
+    await ctrl.goTo(0);
+    await ctrl.play();
+    audio.dispatchEvent(new Event('ended'));
+    await flush();
+    s = last(ctrl);
+    expect(fetchRemote).toHaveBeenCalledTimes(2);
+    expect(s.index).toBe(2);
+    expect(s.playing).toBe(true);
+    expect(s.unavailable).toBeUndefined();
+    ctrl.dispose();
+  });
+
+  it('chapitre devenu prêt après le chargement de la file : lu à l’enchaînement', async () => {
+    await seedNote('n1', 1);
+    await lib.saveChapter(chapter('n1-1', 'n1', 1, { audioStatus: 'generating' }));
+    const ctrl = mk();
+    await ctrl.loadNote('n1');
+    await ctrl.play();
+    await lib.putAudio('n1-1', blob());
+    await lib.saveChapter(chapter('n1-1', 'n1', 1, { audioStatus: 'ready', audioLocal: true }));
+    await flush();
+    audio.dispatchEvent(new Event('ended'));
+    await flush();
+    const s = last(ctrl);
+    expect(s.index).toBe(1);
+    expect(s.waitingForAudio).toBe(false);
+    expect(s.playing).toBe(true);
     ctrl.dispose();
   });
 

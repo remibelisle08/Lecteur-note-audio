@@ -41,6 +41,11 @@ export function PlayerScreen() {
           Ce chapitre est en cours de génération…
         </p>
       )}
+      {state.unavailable && (
+        <p className="card notice" role="status">
+          {state.unavailable}
+        </p>
+      )}
       {state.error && (
         <p className="error" role="alert">
           {state.error}

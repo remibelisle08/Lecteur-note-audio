@@ -34,4 +34,25 @@ describe('MiniPlayer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Avancer de 15 secondes' }));
     expect(fake.player.seekBy).toHaveBeenCalledWith(15);
   });
+
+  it('audio indisponible hors ligne : message sur le lecteur et dans la mini-barre', async () => {
+    const lib = await openTestLibrary();
+    const msg = 'Audio non disponible hors ligne. Reconnecte-toi ou télécharge-le d’abord.';
+    const fake = fakePlayer({ item, queue: [item], unavailable: msg });
+    renderAt('#/player', makeServices(lib, { player: fake.player }));
+    expect(screen.getByText(msg)).toHaveAttribute('role', 'status');
+    expect(screen.queryByText('Ce chapitre est en cours de génération…')).toBeNull();
+    act(() => {
+      window.location.hash = '#/';
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    });
+    expect(screen.getByRole('region', { name: 'Lecture en cours' })).toHaveTextContent('Audio non disponible hors ligne');
+  });
+
+  it('mini-barre : « En cours de génération… » quand l’audio est attendu', async () => {
+    const lib = await openTestLibrary();
+    const fake = fakePlayer({ item, queue: [item], waitingForAudio: true });
+    renderAt('#/', makeServices(lib, { player: fake.player }));
+    expect(screen.getByRole('region', { name: 'Lecture en cours' })).toHaveTextContent('En cours de génération…');
+  });
 });
