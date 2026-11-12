@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { describe, expect, it, vi } from 'vitest';
 import { openLibrary } from '../../src/library/db';
-import type { DriveApi, DriveClient } from '../../src/sync/driveClient';
+import { DriveAuthError, type DriveApi, type DriveClient } from '../../src/sync/driveClient';
 import { createDriveSync } from '../../src/sync/driveSync';
 import type { Chapter } from '../../src/types';
 
@@ -67,6 +67,18 @@ describe('createDriveSync', () => {
     await vi.waitFor(() => expect(api.writeLibrary).toHaveBeenCalledTimes(1));
     vi.mocked(api.downloadAudio).mockRejectedValueOnce(new Error('réseau'));
     expect(await drive.fetchRemoteAudio(ch)).toBeUndefined();
+    expect(drive.getState().status.state).not.toBe('auth-required');
+    drive.disconnect();
+  });
+
+  it('fetchRemoteAudio : autorisation expirée → auth-required (bandeau)', async () => {
+    const { client, api } = fakeClient(true);
+    const drive = createDriveSync(await openTestLibrary(), client);
+    await vi.waitFor(() => expect(drive.getState().status.state).toBe('idle'));
+    await vi.waitFor(() => expect(api.writeLibrary).toHaveBeenCalled());
+    vi.mocked(api.downloadAudio).mockRejectedValueOnce(new DriveAuthError());
+    expect(await drive.fetchRemoteAudio(ch)).toBeUndefined();
+    expect(drive.getState().status.state).toBe('auth-required');
     drive.disconnect();
   });
 });

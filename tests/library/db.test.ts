@@ -164,3 +164,57 @@ describe('library', () => {
     expect(seen).toHaveLength(2);
   });
 });
+
+describe('library.mergeRemote', () => {
+  const empty = () => ({ version: 1 as const, courses: [], notes: [], chapters: [], progress: [], tombstones: [] });
+
+  it('écrit seulement les différences, garde audioLocal, supprime l’audio des chapitres retirés', async () => {
+    await lib.saveCourse(course('c1'));
+    await lib.saveNote(note('n1'));
+    await lib.saveChapter(chapter('a', 'n1', 0));
+    await lib.saveChapter(chapter('b', 'n1', 1));
+    await lib.putAudio('a', blob());
+    await lib.putAudio('b', blob());
+    const before = await lib.exportSnapshot();
+    const remote = {
+      ...before,
+      chapters: before.chapters.map((c) => (c.id === 'a' ? { ...c, title: 'Distant', updatedAt: c.updatedAt + 1 } : c)),
+      tombstones: [{ id: 'b', kind: 'chapter' as const, deletedAt: Date.now() + 1000 }],
+    };
+    const kinds: string[] = [];
+    lib.onChange((k) => kinds.push(k));
+    const out = await lib.mergeRemote(remote);
+    expect(out.changed).toBe(true);
+    expect(out.local.chapters.map((c) => c.id).sort()).toEqual(['a', 'b']);
+    expect(kinds).toEqual(['library']);
+    const chs = await lib.listChapters('n1');
+    expect(chs.map((c) => [c.id, c.title, c.audioLocal])).toEqual([['a', 'Distant', true]]);
+    expect(await lib.getAudio('a')).toBeDefined();
+    expect(await lib.getAudio('b')).toBeUndefined();
+
+    kinds.length = 0;
+    const again = await lib.mergeRemote(await lib.exportSnapshot());
+    expect(again.changed).toBe(false);
+    expect(kinds).toEqual([]);
+  });
+
+  it('une écriture lancée pendant la fusion n’est pas écrasée', async () => {
+    await lib.saveCourse(course('c1'));
+    await lib.saveNote(note('n1'));
+    const merging = lib.mergeRemote({ ...empty(), courses: [course('c2')] });
+    const saving = lib.saveChapter(chapter('fresh', 'n1', 0)).then(() => lib.putAudio('fresh', blob()));
+    await Promise.all([merging, saving]);
+    expect((await lib.listChapters('n1')).map((c) => c.id)).toEqual(['fresh']);
+    expect(await lib.getAudio('fresh')).toBeDefined();
+    expect((await lib.listCourses()).map((c) => c.id).sort()).toEqual(['c1', 'c2']);
+  });
+
+  it('notes générées localement : marqueur posé puis retiré', async () => {
+    expect(await lib.listLocalGenerations()).toEqual([]);
+    await lib.setLocalGeneration('n1', true);
+    await lib.setLocalGeneration('n2', true);
+    await lib.setLocalGeneration('n1', false);
+    expect(await lib.listLocalGenerations()).toEqual(['n2']);
+    expect(await lib.getSettings()).toEqual(DEFAULT_SETTINGS);
+  });
+});

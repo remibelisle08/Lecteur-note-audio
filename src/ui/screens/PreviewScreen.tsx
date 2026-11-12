@@ -68,7 +68,10 @@ export function PreviewScreen({ noteId }: { noteId: string }) {
     try {
       await draft.flush();
       const current = await lib.getNote(noteId);
-      if (current) await lib.saveNote({ ...current, status: 'generating' });
+      if (current) {
+        await lib.setLocalGeneration(noteId, true);
+        await lib.saveNote({ ...current, status: 'generating' });
+      }
     } catch {
       setStarting(false);
       notify(FALLBACK_ERROR);

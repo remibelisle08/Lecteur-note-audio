@@ -17,6 +17,7 @@ const chapter = (id: string, over: Partial<Chapter> = {}): Chapter => ({
   id, noteId: 'n1', index: 0, title: 'Chapitre ' + id, text: 'texte', included: true, audioStatus: 'ready',
   audioLocal: false, updatedAt: NOW, ...over,
 });
+const course1 = { id: 'c1', name: 'Cours', order: 0, updatedAt: NOW };
 const emptySnap = (): Snapshot => ({ version: 1, courses: [], notes: [], chapters: [], progress: [], tombstones: [] });
 
 function readText(blob: Blob): Promise<string> {
@@ -95,6 +96,7 @@ describe('SyncEngine.syncNow', () => {
     const drive = fakeDrive('{oops');
     const engine = new SyncEngine(lib, drive.api, settings());
     const applySpy = vi.spyOn(lib, 'applySnapshot');
+    const mergeSpy = vi.spyOn(lib, 'mergeRemote');
     const statuses: SyncStatus[] = [];
     engine.onStatus((s) => statuses.push(s));
 
@@ -108,6 +110,7 @@ describe('SyncEngine.syncNow', () => {
     expect(drive.api.uploadAudio).not.toHaveBeenCalled();
     expect(drive.api.deleteFile).not.toHaveBeenCalled();
     expect(applySpy).not.toHaveBeenCalled();
+    expect(mergeSpy).not.toHaveBeenCalled();
   });
 
   it('distant de mauvaise version ou incomplet → error, aucune écriture', async () => {
@@ -129,6 +132,29 @@ describe('SyncEngine.syncNow', () => {
     await new SyncEngine(lib, drive.api, settings()).syncNow();
     expect((await lib.listNotes('c1')).map((x) => x.id).sort()).toEqual(['n1', 'n2']);
     expect((JSON.parse(drive.library!) as Snapshot).notes).toHaveLength(2);
+  });
+
+  it('écriture locale concurrente (entre lecture du distant et fusion) → conservée, audio compris', async () => {
+    const real = await openTestLibrary();
+    await seedNote(real);
+    const drive = fakeDrive(JSON.stringify({ ...emptySnap(), courses: [course1], notes: [note('n2')] }));
+    // Juste avant la fusion (après la lecture du distant), le générateur termine un chapitre.
+    const lib: Library = {
+      ...real,
+      mergeRemote: async (remote, merge) => {
+        await real.saveChapter(chapter('fresh', { audioStatus: 'ready' }));
+        await real.putAudio('fresh', new Blob(['neuf'], { type: 'audio/mpeg' }));
+        return real.mergeRemote(remote, merge);
+      },
+    };
+    await new SyncEngine(lib, drive.api, settings()).syncNow();
+    const chs = await real.listChapters('n1');
+    expect(chs.map((c) => c.id)).toEqual(['fresh']);
+    expect(chs[0].audioStatus).toBe('ready');
+    const blob = await real.getAudio('fresh');
+    expect(blob && (await readText(blob))).toBe('neuf');
+    expect((await real.listNotes('c1')).map((x) => x.id).sort()).toEqual(['n1', 'n2']);
+    expect(drive.api.uploadAudio).toHaveBeenCalledWith('folder-1', 'fresh', expect.any(Blob));
   });
 
   it('audio local sans audioDriveId → téléversé puis audioDriveId enregistré', async () => {
@@ -153,7 +179,7 @@ describe('SyncEngine.syncNow', () => {
     const drive = fakeDrive();
     drive.files.set('file-9', new Blob(['distant'], { type: 'audio/mpeg' }));
     const { audioLocal: _a, ...remoteCh } = chapter('ch1', { audioDriveId: 'file-9' });
-    await drive.api.writeLibrary('folder-1', JSON.stringify({ ...emptySnap(), notes: [note('n1')], chapters: [remoteCh] }));
+    await drive.api.writeLibrary('folder-1', JSON.stringify({ ...emptySnap(), courses: [course1], notes: [note('n1')], chapters: [remoteCh] }));
     drive.api.writeLibrary.mockClear();
 
     await new SyncEngine(lib, drive.api, settings({ autoDownloadAudio: true })).syncNow();
@@ -168,7 +194,7 @@ describe('SyncEngine.syncNow', () => {
     const drive = fakeDrive();
     drive.files.set('file-9', new Blob(['distant'], { type: 'audio/mpeg' }));
     const { audioLocal: _a, ...remoteCh } = chapter('ch1', { audioDriveId: 'file-9' });
-    await drive.api.writeLibrary('folder-1', JSON.stringify({ ...emptySnap(), notes: [note('n1')], chapters: [remoteCh] }));
+    await drive.api.writeLibrary('folder-1', JSON.stringify({ ...emptySnap(), courses: [course1], notes: [note('n1')], chapters: [remoteCh] }));
 
     await new SyncEngine(lib, drive.api, settings({ autoDownloadAudio: false })).syncNow();
     expect(drive.api.downloadAudio).not.toHaveBeenCalled();
@@ -184,7 +210,7 @@ describe('SyncEngine.syncNow', () => {
     const progress = { noteId: 'n1', chapterIndex: 0, positionSec: 0, completedChapterIds: ['ch1'], updatedAt: NOW };
     await drive.api.writeLibrary(
       'folder-1',
-      JSON.stringify({ ...emptySnap(), notes: [note('n1')], chapters: [remoteCh], progress: [progress] }),
+      JSON.stringify({ ...emptySnap(), courses: [course1], notes: [note('n1')], chapters: [remoteCh], progress: [progress] }),
     );
 
     await new SyncEngine(lib, drive.api, settings({ autoDownloadAudio: true })).syncNow();

@@ -1,7 +1,6 @@
 import type { ChangeKind, Library } from '../library/db';
 import type { Chapter, Settings, Snapshot } from '../types';
 import { DriveAuthError, type DriveApi } from './driveClient';
-import { mergeSnapshots } from './merge';
 
 export type SyncStatus = { state: 'idle' | 'syncing' | 'error' | 'auth-required'; lastSyncAt?: number; message?: string };
 export type SyncResult = { ok: boolean; uploaded: number; downloaded: number; deleted: number };
@@ -154,18 +153,8 @@ export class SyncEngine {
       const raw = await this.api.readLibrary(folderId);
       const remote = raw === null ? EMPTY : parseSnapshot(raw);
 
-      // Fusion avec un instantané local relu juste avant l'application (fenêtre de concurrence minimale).
-      let local = await this.lib.exportSnapshot();
-      let merged = mergeSnapshots(local, remote);
-      for (let i = 0; i < 3; i++) {
-        const again = await this.lib.exportSnapshot();
-        if (JSON.stringify(again) === JSON.stringify(local)) break;
-        local = again;
-        merged = mergeSnapshots(local, remote);
-      }
-      if (JSON.stringify(merged) !== JSON.stringify(local)) {
-        await this.selfWrite(() => this.lib.applySnapshot(merged));
-      }
+      // Fusion dans une seule transaction locale : les écritures concurrentes ne sont pas écrasées.
+      const { local, merged } = await this.selfWrite(() => this.lib.mergeRemote(remote));
 
       // Audio Drive des chapitres supprimés (connus d'un côté, absents de la fusion).
       const kept = new Set(merged.chapters.map((c) => c.id));

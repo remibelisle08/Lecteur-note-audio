@@ -143,6 +143,7 @@ describe('Generator', () => {
     ]);
     const note = (await lib.getNote('n1'))!;
     await lib.saveNote({ ...note, status: 'generating' });
+    await lib.setLocalGeneration('n1', true); // lancée sur cet appareil
     const { engine, calls } = makeEngine();
     await gen(lib, engine).resumeAll();
     expect(calls.some((c) => c.includes('Alpha'))).toBe(false);
@@ -150,6 +151,37 @@ describe('Generator', () => {
     expect(calls.some((c) => c.includes('Gamma'))).toBe(true);
     expect((await lib.listChapters('n1')).map((c) => c.audioStatus)).toEqual(['ready', 'ready', 'ready']);
     expect((await lib.getNote('n1'))!.status).toBe('ready');
+  });
+
+  it('resumeAll ignore une note « generating » venue d’un autre appareil ; marqueur local retiré à la fin', async () => {
+    const lib = await setup([{ title: 'A', text: 'Alpha.' }]);
+    await addNote(lib, 'n2', [{ title: 'B', text: 'Beta.' }], 2);
+    for (const id of ['n1', 'n2']) await lib.saveNote({ ...(await lib.getNote(id))!, status: 'generating' });
+    await lib.setLocalGeneration('n2', true);
+    const { engine, calls } = makeEngine();
+    await gen(lib, engine).resumeAll();
+    expect(calls.some((c) => c.includes('Alpha'))).toBe(false);
+    expect(calls.some((c) => c.includes('Beta'))).toBe(true);
+    expect((await lib.getNote('n1'))!.status).toBe('generating');
+    expect((await lib.getNote('n2'))!.status).toBe('ready');
+    expect(await lib.listLocalGenerations()).toEqual([]);
+  });
+
+  it('generateNote : marqueur local pendant la génération ; chapitre avec audio Drive non régénéré', async () => {
+    const lib = await setup([{ title: 'A', text: 'Alpha.' }, { title: 'B', text: 'Beta.' }]);
+    const [a] = await lib.listChapters('n1');
+    await lib.saveChapter({ ...a, audioDriveId: 'drive-a' });
+    let release!: () => void;
+    const { engine, calls } = makeEngine({ gate: new Promise((r) => (release = r)) });
+    const p = gen(lib, engine).generateNote('n1');
+    await vi.waitFor(async () => expect(await lib.listLocalGenerations()).toEqual(['n1']));
+    release();
+    await p;
+    expect(calls.some((c) => c.includes('Alpha'))).toBe(false);
+    expect(calls.some((c) => c.includes('Beta'))).toBe(true);
+    expect((await lib.listChapters('n1')).map((c) => c.audioStatus)).toEqual(['ready', 'ready']);
+    expect((await lib.getNote('n1'))!.status).toBe('ready');
+    expect(await lib.listLocalGenerations()).toEqual([]);
   });
 
   it('progression pendant le rendu', async () => {

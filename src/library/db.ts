@@ -9,8 +9,11 @@ import {
   type Snapshot,
   type Tombstone,
 } from '../types';
+import { mergeSnapshots } from '../sync/merge';
 
 export type ChangeKind = 'library' | 'progress';
+
+export type MergeOutcome = { local: Snapshot; merged: Snapshot; changed: boolean };
 
 export interface Library {
   listCourses(): Promise<Course[]>;
@@ -33,6 +36,14 @@ export interface Library {
   recoverInterrupted(): Promise<number>;
   exportSnapshot(): Promise<Snapshot>;
   applySnapshot(s: Snapshot): Promise<void>;
+  /**
+   * Fusionne un instantané distant dans une seule transaction : l'état local est relu dans la transaction,
+   * seules les lignes modifiées sont écrites (les écritures concurrentes ne sont pas écrasées).
+   */
+  mergeRemote(remote: Snapshot, merge?: (local: Snapshot, remote: Snapshot) => Snapshot): Promise<MergeOutcome>;
+  /** Notes dont la génération a été lancée sur cet appareil (seules reprises au démarrage). */
+  listLocalGenerations(): Promise<string[]>;
+  setLocalGeneration(noteId: string, active: boolean): Promise<void>;
   onChange(listener: (kind: ChangeKind) => void): () => void;
 }
 
@@ -45,7 +56,7 @@ interface LibSchema extends DBSchema {
   chapters: { key: string; value: Chapter; indexes: { noteId: string } };
   progress: { key: string; value: Progress };
   audio: { key: string; value: StoredAudio };
-  meta: { key: string; value: Settings };
+  meta: { key: string; value: Settings | string[] };
   tombstones: { key: string; value: Tombstone };
 }
 
@@ -183,7 +194,7 @@ export async function openLibrary(name = 'lecteur-notes'): Promise<Library> {
       return stored;
     },
     async getSettings() {
-      const s = await db.get('meta', 'settings');
+      const s = (await db.get('meta', 'settings')) as Settings | undefined;
       return { ...DEFAULT_SETTINGS, ...(s ?? {}) };
     },
     async saveSettings(s) {
@@ -240,6 +251,80 @@ export async function openLibrary(name = 'lecteur-notes'): Promise<Library> {
       for (const t of s.tombstones) await tx.objectStore('tombstones').put(t);
       await tx.done;
       emit('library');
+    },
+    async mergeRemote(remote, merge = mergeSnapshots) {
+      const tx = db.transaction(['courses', 'notes', 'chapters', 'progress', 'tombstones', 'audio'], 'readwrite');
+      const [courses, notes, chapters, progress, tombstones] = await Promise.all([
+        tx.objectStore('courses').getAll(),
+        tx.objectStore('notes').getAll(),
+        tx.objectStore('chapters').getAll(),
+        tx.objectStore('progress').getAll(),
+        tx.objectStore('tombstones').getAll(),
+      ]);
+      const audioLocal = new Map(chapters.map((c) => [c.id, c.audioLocal]));
+      const local: Snapshot = {
+        version: 1,
+        courses,
+        notes,
+        chapters: chapters.map(({ audioLocal: _audioLocal, ...rest }) => rest),
+        progress,
+        tombstones,
+      };
+      // Fusion pure et synchrone : aucune attente étrangère dans la transaction.
+      const merged = merge(local, remote);
+      const writes: Promise<unknown>[] = [];
+      let changed = false;
+      const sync = <T,>(
+        before: T[],
+        after: T[],
+        key: (x: T) => string,
+        put: (x: T) => Promise<unknown>,
+        del: (k: string) => Promise<unknown>,
+      ) => {
+        const prev = new Map(before.map((x) => [key(x), JSON.stringify(x)]));
+        const next = new Set<string>();
+        for (const x of after) {
+          next.add(key(x));
+          if (prev.get(key(x)) !== JSON.stringify(x)) {
+            changed = true;
+            writes.push(put(x));
+          }
+        }
+        for (const k of prev.keys()) {
+          if (!next.has(k)) {
+            changed = true;
+            writes.push(del(k));
+          }
+        }
+      };
+      sync(local.courses, merged.courses, (c) => c.id, (c) => tx.objectStore('courses').put(c), (k) => tx.objectStore('courses').delete(k));
+      sync(local.notes, merged.notes, (x) => x.id, (x) => tx.objectStore('notes').put(x), (k) => tx.objectStore('notes').delete(k));
+      sync(
+        local.chapters,
+        merged.chapters,
+        (c) => c.id,
+        (c) => tx.objectStore('chapters').put({ ...c, audioLocal: audioLocal.get(c.id) ?? false }),
+        (k) => Promise.all([tx.objectStore('chapters').delete(k), tx.objectStore('audio').delete(k)]),
+      );
+      sync(local.progress, merged.progress, (p) => p.noteId, (p) => tx.objectStore('progress').put(p), (k) => tx.objectStore('progress').delete(k));
+      sync(local.tombstones, merged.tombstones, (t) => t.id, (t) => tx.objectStore('tombstones').put(t), (k) => tx.objectStore('tombstones').delete(k));
+      await Promise.all(writes);
+      await tx.done;
+      if (changed) emit('library');
+      return { local, merged, changed };
+    },
+    async listLocalGenerations() {
+      const v = await db.get('meta', 'local-generations');
+      return Array.isArray(v) ? v : [];
+    },
+    async setLocalGeneration(noteId, active) {
+      const tx = db.transaction('meta', 'readwrite');
+      const v = await tx.store.get('local-generations');
+      const ids = new Set(Array.isArray(v) ? v : []);
+      if (active) ids.add(noteId);
+      else ids.delete(noteId);
+      await tx.store.put([...ids], 'local-generations');
+      await tx.done;
     },
     onChange(listener) {
       listeners.add(listener);

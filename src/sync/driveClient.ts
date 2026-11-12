@@ -14,6 +14,8 @@ const TOKEN_KEY = 'lecteur-notes.drive-token';
 const LINKED_KEY = 'lecteur-notes.drive-linked';
 /** Marge avant l'expiration du jeton : on le renouvelle un peu avant. */
 const EXPIRY_MARGIN_MS = 60_000;
+/** Sans réponse de Google Identity dans ce délai, la demande de jeton échoue. */
+export const TOKEN_TIMEOUT_MS = 60_000;
 
 export class DriveAuthError extends Error {
   constructor(message = 'Autorisation Google Drive requise') {
@@ -48,6 +50,10 @@ export const fileInFolderQuery = (name: string, folderId: string) =>
   `name=${quote(name)} and ${quote(folderId)} in parents and trashed=false`;
 
 export const audioFileName = (chapterId: string) => `chapter-${chapterId}.mp3`;
+
+/** Paramètres de `files.list` : le plus ancien fichier correspondant (doublons éventuels ignorés). */
+export const listFilesParams = (q: string) =>
+  new URLSearchParams({ q, fields: 'files(id)', spaces: 'drive', orderBy: 'createdTime', pageSize: '1' }).toString();
 
 export function buildMultipartBody(
   metadata: Record<string, unknown>,
@@ -147,8 +153,9 @@ export function createDriveClient(clientId: string): DriveClient {
   let current = readStoredToken();
   let linked = storage.get(LINKED_KEY) === '1';
   let tokenClient: TokenClient | undefined;
-  let pending: { resolve: (t: string) => void; reject: (e: Error) => void } | undefined;
-  let inflight: Promise<string> | undefined;
+  type Pending = { resolve: (t: string) => void; reject: (e: Error) => void };
+  let pending: Pending | undefined;
+  let silentInflight: Promise<string> | undefined;
   let folderId: string | undefined;
   let libraryFileId: string | undefined;
 
@@ -175,19 +182,41 @@ export function createDriveClient(clientId: string): DriveClient {
     return tokenClient;
   }
 
+  /**
+   * `prompt: ''` = renouvellement silencieux (partagé entre appels concurrents) ; sans prompt = connexion
+   * interactive, toujours une nouvelle demande. GIS n'a qu'un rappel : une nouvelle demande remplace
+   * (et fait échouer) celle en attente.
+   */
   function requestToken(prompt?: string): Promise<string> {
-    inflight ??= getTokenClient()
-      .then(
-        (tc) =>
-          new Promise<string>((resolve, reject) => {
-            pending = { resolve, reject };
-            tc.requestAccessToken(prompt === undefined ? undefined : { prompt });
-          }),
-      )
-      .finally(() => {
-        inflight = undefined;
-      });
-    return inflight;
+    const silent = prompt === '';
+    if (silent && silentInflight) return silentInflight;
+    const p = getTokenClient().then(
+      (tc) =>
+        new Promise<string>((resolve, reject) => {
+          pending?.reject(new DriveAuthError());
+          const me: Pending = {
+            resolve: (t) => {
+              clearTimeout(timer);
+              resolve(t);
+            },
+            reject: (e) => {
+              clearTimeout(timer);
+              reject(e);
+            },
+          };
+          const timer = setTimeout(() => {
+            if (pending === me) pending = undefined;
+            me.reject(new DriveAuthError());
+          }, TOKEN_TIMEOUT_MS);
+          pending = me;
+          tc.requestAccessToken(silent ? { prompt: '' } : undefined);
+        }),
+    );
+    if (!silent) return p;
+    silentInflight = p.finally(() => {
+      silentInflight = undefined;
+    });
+    return silentInflight;
   }
 
   async function getToken(): Promise<string> {
@@ -219,8 +248,7 @@ export function createDriveClient(clientId: string): DriveClient {
   }
 
   async function findFile(q: string): Promise<string | undefined> {
-    const params = new URLSearchParams({ q, fields: 'files(id)', spaces: 'drive', pageSize: '1' });
-    const res = await request(`${API}/files?${params}`);
+    const res = await request(`${API}/files?${listFilesParams(q)}`);
     const data = (await res.json()) as { files?: { id: string }[] };
     return data.files?.[0]?.id;
   }

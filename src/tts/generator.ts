@@ -59,9 +59,14 @@ export class Generator {
 
   async resumeAll(): Promise<void> {
     await this.lib.recoverInterrupted();
+    // Seules les générations lancées sur cet appareil sont reprises : une note « generating » reçue de Drive
+    // est en cours sur un autre appareil.
+    const local = new Set(await this.lib.listLocalGenerations());
     const notes = [];
     for (const course of await this.lib.listCourses()) {
-      for (const note of await this.lib.listNotes(course.id)) if (note.status === 'generating') notes.push(note);
+      for (const note of await this.lib.listNotes(course.id)) {
+        if (note.status === 'generating' && local.has(note.id)) notes.push(note);
+      }
     }
     notes.sort((a, b) => a.createdAt - b.createdAt);
     await Promise.all(notes.map((n) => this.generateNote(n.id)));
@@ -74,7 +79,11 @@ export class Generator {
   private async run(noteId: string): Promise<void> {
     const lib = this.lib;
     const note = await lib.getNote(noteId);
-    if (!note) return;
+    if (!note) {
+      await lib.setLocalGeneration(noteId, false);
+      return;
+    }
+    await lib.setLocalGeneration(noteId, true);
 
     // Chapitres exclus supprimés, index recalculés 0..n-1.
     let chapters = await lib.listChapters(noteId);
@@ -86,7 +95,12 @@ export class Generator {
 
     await lib.saveNote({ ...(await lib.getNote(noteId))!, status: 'generating' });
 
-    const todo = chapters.filter((c) => c.audioStatus !== 'ready');
+    // Un chapitre avec audio sur Drive (téléversé une fois prêt, sur un autre appareil) n'est pas régénéré :
+    // il est prêt, le lecteur le télécharge au besoin.
+    for (const c of chapters) {
+      if (c.audioDriveId && c.audioStatus !== 'ready') await lib.saveChapter({ ...c, audioStatus: 'ready' });
+    }
+    const todo = chapters.filter((c) => c.audioStatus !== 'ready' && !c.audioDriveId);
     if (todo.length > 0) {
       const settings = await lib.getSettings();
       let engine: TtsEngine;
@@ -107,6 +121,7 @@ export class Generator {
     if (final.every((c) => c.audioStatus === 'ready')) {
       const cur = await lib.getNote(noteId);
       if (cur) await lib.saveNote({ ...cur, status: 'ready' });
+      await lib.setLocalGeneration(noteId, false);
     }
   }
 

@@ -1,7 +1,7 @@
 import type { Library } from '../library/db';
 import type { Chapter } from '../types';
-import type { DriveClient } from './driveClient';
-import { SyncEngine, type SyncStatus } from './syncEngine';
+import { DriveAuthError, type DriveClient } from './driveClient';
+import { AUTH_MESSAGE, SyncEngine, type SyncStatus } from './syncEngine';
 
 export type DriveState = { configured: boolean; connected: boolean; status: SyncStatus };
 
@@ -92,7 +92,11 @@ export function createDriveSync(lib: Library, client: DriveClient | null): Drive
       if (!client?.isConnected() || !ch.audioDriveId) return undefined;
       try {
         return await client.api.downloadAudio(ch.audioDriveId);
-      } catch {
+      } catch (err) {
+        // Autorisation expirée : le bandeau « Reconnecter Drive » s'affiche.
+        if (err instanceof DriveAuthError && state.connected) {
+          set({ status: { state: 'auth-required', lastSyncAt: state.status.lastSyncAt, message: AUTH_MESSAGE } });
+        }
         return undefined;
       }
     },
