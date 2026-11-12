@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AppProvider, useApp, type AppServices } from './AppContext';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { MiniPlayer } from './components/MiniPlayer';
 import { usePlayerHasItem } from './hooks/usePlayerState';
 import { VoiceDownload } from './components/VoiceDownload';
@@ -99,8 +100,17 @@ function Shell() {
   );
 }
 
-/** Sans services (démarrage en cours) : écran d'accueil vide le temps d'ouvrir la bibliothèque. */
+/** Racine de l'app, protégée par un filet d'erreurs (message + « Recharger » plutôt qu'un écran blanc). */
 export function App({ services }: { services?: AppServices }) {
+  return (
+    <ErrorBoundary>
+      <Root services={services} />
+    </ErrorBoundary>
+  );
+}
+
+/** Sans services (démarrage en cours) : écran d'accueil vide le temps d'ouvrir la bibliothèque. */
+function Root({ services }: { services?: AppServices }) {
   if (!services) {
     return (
       <main className="screen">
