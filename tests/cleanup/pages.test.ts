@@ -25,6 +25,13 @@ describe('removeHeadersFooters', () => {
     expect(out.some(x => x.text === 'Biochimie L2')).toBe(false);
     expect(out).toHaveLength(3);
   });
+  it('garde les titres répétés en haut de page', () => {
+    const blocks = [1, 2, 3].flatMap(n => [
+      { ...b('Introduction', n, 0.05), kind: 'heading' as const, level: 1 },
+      b(`Texte ${n}`, n, 0.5),
+    ]);
+    expect(removeHeadersFooters(blocks)).toHaveLength(6);
+  });
   it('garde une ligne répétée au milieu de la page', () => {
     const blocks = [1, 2, 3, 4].map(n => b('Rappel important', n, 0.5));
     expect(removeHeadersFooters(blocks)).toHaveLength(4);

@@ -8,7 +8,7 @@ const S3 = 'Ils entrent aussi dans les membranes cellulaires.';
 const S4 = 'Les sels biliaires émulsifient les graisses alimentaires.';
 
 const title = (text: string, page: number): RawBlock => ({
-  text, kind: 'paragraph', page, fontSize: 20, yRatio: 0.15,
+  text, kind: 'paragraph', page, fontSize: 20, yRatio: 0.05,
 });
 const body = (text: string, page: number, yRatio: number): RawBlock => ({
   text, kind: 'paragraph', page, fontSize: 12, yRatio,
@@ -44,5 +44,37 @@ describe('cleanDocument', () => {
       'docx',
     );
     expect(out).toEqual([{ title: 'A', text: 'Texte de A.', included: true, flags: [] }]);
+  });
+
+  const cap = 'Schéma de la digestion';
+  const long1 = 'Une phrase complète et assez longue pour le test, qui se termine bien.';
+  const long2 = 'Une autre phrase complète et assez longue pour le test, aussi terminée.';
+
+  it('DOCX : une légende courte reste un paragraphe et pose has-captions', () => {
+    const out = cleanDocument(
+      [
+        { text: 'H', kind: 'heading', level: 1 },
+        { text: long1, kind: 'paragraph' },
+        { text: cap, kind: 'paragraph' },
+        { text: long2, kind: 'paragraph' },
+      ],
+      'docx',
+    );
+    expect(out).toEqual([
+      { title: 'H', text: `${long1}\n\n${cap}\n\n${long2}`, included: true, flags: ['has-captions'] },
+    ]);
+  });
+
+  it('PDF : une légende courte sur la même page reste un paragraphe et pose has-captions', () => {
+    const b = (text: string, y: number): RawBlock => ({
+      text, kind: 'paragraph', page: 1, fontSize: 12, yRatio: y,
+    });
+    const out = cleanDocument(
+      [title('Digestion', 1), b(long1, 0.3), b(cap, 0.4), b(long2, 0.5)],
+      'pdf',
+    );
+    expect(out).toEqual([
+      { title: 'Digestion', text: `${long1}\n\n${cap}\n\n${long2}`, included: true, flags: ['has-captions'] },
+    ]);
   });
 });

@@ -3,6 +3,8 @@ import type { RawBlock } from '../types';
 const SENTENCE_END = /[.!?:]$/;
 const HYPHEN_BREAK = /\p{L}-$/u;
 const STARTS_LOWER = /^\p{Ll}/u;
+const STARTS_UPPER = /^\p{Lu}/u;
+const SHORT_LINE_WORDS = 8;
 
 /** Recolle les lignes d'un même paragraphe et les césures de fin de ligne. */
 export function joinLines(blocks: RawBlock[]): RawBlock[] {
@@ -13,6 +15,8 @@ export function joinLines(blocks: RawBlock[]): RawBlock[] {
       prev &&
       prev.kind !== 'heading' &&
       block.kind !== 'heading' &&
+      // Seules les lignes PDF (avec page) se recollent ; les paragraphes DOCX sont déjà entiers.
+      prev.page !== undefined &&
       prev.page === block.page;
     if (mergeable) {
       const prevText = prev.text.trimEnd();
@@ -20,7 +24,10 @@ export function joinLines(blocks: RawBlock[]): RawBlock[] {
         prev.text = prevText.slice(0, -1) + block.text;
         continue;
       }
-      if (!SENTENCE_END.test(prevText)) {
+      // Une ligne courte sans ponctuation suivie d'une majuscule est une légende, pas une suite.
+      const looksLikeCaption =
+        prevText.split(/\s+/).length < SHORT_LINE_WORDS && STARTS_UPPER.test(block.text);
+      if (!SENTENCE_END.test(prevText) && !looksLikeCaption) {
         prev.text = prevText + ' ' + block.text;
         continue;
       }

@@ -4,7 +4,9 @@ const EDGE = 0.1;
 const MIN_PAGES = 3;
 const MIN_SHARE = 0.5;
 
+// Les titres (kind 'heading') ne sont jamais des en-têtes/pieds : un titre de diapo répété reste.
 const inEdgeZone = (b: RawBlock): boolean =>
+  b.kind !== 'heading' &&
   b.yRatio !== undefined && (b.yRatio < EDGE || b.yRatio > 1 - EDGE);
 
 function normalize(text: string): string {

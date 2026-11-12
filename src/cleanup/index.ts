@@ -15,9 +15,10 @@ export { detectChapters, estimateMinutes } from './chapters';
 export function cleanDocument(blocks: RawBlock[], source: 'pdf' | 'docx'): DraftChapter[] {
   let work: RawBlock[];
   if (source === 'pdf') {
-    work = dedupeProgressiveSlides(removePageNumbers(removeHeadersFooters(blocks)));
+    // Titres marqués d'abord : removeHeadersFooters épargne les titres répétés en haut de page.
+    work = dedupeProgressiveSlides(removePageNumbers(removeHeadersFooters(markPdfHeadings(blocks))));
     work = work.map(b => (b.kind === 'heading' ? b : { ...b, text: stripOcrArtifacts(b.text) }));
-    work = markPdfHeadings(dropNoiseBlocks(work));
+    work = dropNoiseBlocks(work);
     work = joinLines(work);
   } else {
     work = joinLines(blocks);

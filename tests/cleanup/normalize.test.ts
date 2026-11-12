@@ -35,6 +35,14 @@ describe('joinLines', () => {
       ['paragraph', 'Ils sont variés'],
     ]);
   });
+  it('ne fusionne jamais des blocs sans page (DOCX)', () => {
+    const out = joinLines([p('Premier paragraphe sans point'), p('Second paragraphe')]);
+    expect(out.map(b => b.text)).toEqual(['Premier paragraphe sans point', 'Second paragraphe']);
+  });
+  it('ne fusionne pas une ligne courte sans ponctuation avec une ligne en majuscule', () => {
+    const out = joinLines([p('Schéma de la digestion', 1), p('Une phrase suivante.', 1)]);
+    expect(out.map(b => b.text)).toEqual(['Schéma de la digestion', 'Une phrase suivante.']);
+  });
   it('ne fusionne pas à travers les pages', () => {
     const out = joinLines([p('Fin de page sans point', 1), p('début de page suivante', 2)]);
     expect(out.map(b => b.text)).toEqual(['Fin de page sans point', 'début de page suivante']);
