@@ -1,3 +1,4 @@
+import mammoth from 'mammoth';
 import { docxToBlocks } from '../../src/import/docx';
 import { importFile } from '../../src/import';
 import { makeDocx } from '../fixtures/makeDocx';
@@ -13,6 +14,18 @@ describe('docxToBlocks', () => {
       await makeDocx([{ heading: 2, text: 'Partie A' }, { text: '   ' }, { text: 'Texte.' }]),
     );
     expect(b).toEqual([{ text: 'Partie A', kind: 'heading', level: 2 }, { text: 'Texte.', kind: 'paragraph' }]);
+  });
+
+  it('docx avec image : texte conservé, image non encodée en base64', async () => {
+    const convert = vi.spyOn(mammoth, 'convertToHtml');
+    const data = await makeDocx([{ heading: 1, text: 'Schéma' }, { text: 'La cellule ci-dessus.', image: true }]);
+    const b = await docxToBlocks(data);
+    expect(b).toEqual([{ text: 'Schéma', kind: 'heading', level: 1 }, { text: 'La cellule ci-dessus.', kind: 'paragraph' }]);
+    expect(convert).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ convertImage: expect.anything() }));
+    const { value: html } = await convert.mock.results[0].value;
+    expect(html).toContain('<img');
+    expect(html).not.toContain('base64');
+    convert.mockRestore();
   });
 });
 

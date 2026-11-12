@@ -3,6 +3,8 @@ import type { RawBlock } from '../types';
 
 const HEADINGS: Record<string, number> = { H1: 1, H2: 2, H3: 3 };
 const BULLET = /^[•·▪◦‣-]\s*/;
+/** Images ignorées : jamais lues ni encodées en base64 (seul le texte est utile, sans gonfler le HTML). */
+const DROP_IMAGES = mammoth.images.imgElement(() => Promise.resolve({ src: '' }));
 
 function ownText(el: Element): string {
   // Pour un <li>, ignorer les sous-listes (elles produisent leurs propres blocs).
@@ -18,7 +20,7 @@ function ownText(el: Element): string {
 export async function docxToBlocks(data: ArrayBuffer): Promise<RawBlock[]> {
   // `arrayBuffer` : build navigateur de mammoth ; `buffer` : build Node (Vitest). JSZip accepte les deux.
   const input = { arrayBuffer: data, buffer: data } as unknown as { arrayBuffer: ArrayBuffer };
-  const { value: html } = await mammoth.convertToHtml(input);
+  const { value: html } = await mammoth.convertToHtml(input, { convertImage: DROP_IMAGES });
   const dom = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
   const blocks: RawBlock[] = [];
   for (const el of Array.from(dom.body.querySelectorAll('h1, h2, h3, h4, h5, h6, p, li'))) {
