@@ -1,12 +1,30 @@
 /// <reference types="vitest/config" />
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+
+/**
+ * piper_phonemize.js (Emscripten, UMD/CommonJS) → module ES : on retire les require()
+ * des branches Node (jamais exécutées dans le worker) et on ajoute un export par défaut.
+ */
+function piperPhonemizeEsm(): Plugin {
+  return {
+    name: 'piper-phonemize-esm',
+    enforce: 'pre',
+    transform(code, id) {
+      if (!id.split('?')[0].endsWith('/piper-wasm/build/piper_phonemize.js')) return null;
+      const out = code.replace(/require\("(fs|path|crypto)"\)/g, 'undefined');
+      return { code: `${out}\nexport default createPiperPhonemize;\n`, map: null };
+    },
+  };
+}
 
 export default defineConfig({
   base: '/Lecteur-note-audio/',
-  plugins: [react()],
-  // Le worker Piper charge onnxruntime-web en import dynamique : format ES requis.
-  worker: { format: 'es' },
+  plugins: [react(), piperPhonemizeEsm()],
+  // Worker Piper en module ES, avec la même transformation du phonémiseur.
+  worker: { format: 'es', plugins: () => [piperPhonemizeEsm()] },
+  // Pas de pré-bundling esbuild : le plugin ci-dessus doit voir le fichier en dev aussi.
+  optimizeDeps: { exclude: ['@diffusionstudio/piper-wasm'] },
   test: {
     environment: 'jsdom',
     globals: true,

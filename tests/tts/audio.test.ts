@@ -79,6 +79,11 @@ describe('wavToPcm', () => {
   it('wavToPcm refuse un fichier qui n’est pas un WAV', () => {
     expect(() => wavToPcm(new ArrayBuffer(10))).toThrow();
   });
+  it('wavToPcm refuse un WAV sans canal', () => {
+    const wav = makeWav([1, 2], 22050);
+    new DataView(wav).setUint16(22, 0, true);
+    expect(() => wavToPcm(wav)).toThrow(/aucun canal/);
+  });
 });
 
 describe('renderChapterToMp3', () => {
@@ -115,7 +120,14 @@ describe('renderChapterToMp3', () => {
 
   it('renderChapterToMp3 rapporte la progression jusqu’à 1', async () => {
     const ratios: number[] = [];
-    await renderChapterToMp3(SEGMENTS, fakeEngine(), (r) => ratios.push(r));
+    let flushed = false;
+    const createEncoder = (sampleRate: number): Mp3EncoderLike => {
+      const real = new Mp3Encoder(1, sampleRate, 48);
+      return { encodeBuffer: (l: Int16Array) => real.encodeBuffer(l), flush: () => { flushed = true; return real.flush(); } };
+    };
+    const flushedAtOne: boolean[] = [];
+    await renderChapterToMp3(SEGMENTS, fakeEngine(), (r) => { ratios.push(r); if (r === 1) flushedAtOne.push(flushed); }, { createEncoder });
+    expect(flushedAtOne).toEqual([true]);
     expect(ratios.length).toBeGreaterThan(0);
     for (let i = 1; i < ratios.length; i++) expect(ratios[i]).toBeGreaterThanOrEqual(ratios[i - 1]);
     expect(ratios.every((r) => r >= 0 && r <= 1)).toBe(true);

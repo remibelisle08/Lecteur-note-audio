@@ -59,6 +59,7 @@ export function wavToPcm(wav: ArrayBuffer): { pcm: Float32Array; sampleRate: num
       sampleRate = v.getUint32(body + 4, true);
       bits = v.getUint16(body + 14, true);
     } else if (id === 'data') {
+      if (channels < 1) throw new Error('WAV invalide (aucun canal)');
       if (format !== 1 || bits !== 16 || !sampleRate) throw new Error('WAV non pris en charge (PCM 16 bits attendu)');
       const frames = Math.floor(Math.min(size, wav.byteLength - body) / (2 * channels));
       const pcm = new Float32Array(frames);
@@ -115,10 +116,11 @@ export async function renderChapterToMp3(
     if (seg.kind === 'speech') feed(await engine.synthesize(seg.text));
     else if (seg.kind === 'pause') feedSilence(Math.round(seg.seconds * sampleRate));
     else feed(beep(sampleRate));
-    onProgress?.((i + 1) / segments.length);
+    // Le dernier segment est signalé à 1 seulement après flush().
+    if (i + 1 < segments.length) onProgress?.((i + 1) / segments.length);
   }
   push(encoder.flush());
-  if (segments.length === 0) onProgress?.(1);
+  onProgress?.(1);
 
   return {
     blob: new Blob(chunks as BlobPart[], { type: 'audio/mpeg' }),

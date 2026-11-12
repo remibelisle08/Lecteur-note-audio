@@ -1,5 +1,3 @@
-import { wavToPcm } from './audio';
-
 export interface TtsEngine {
   sampleRate: number;
   synthesize(text: string): Promise<Float32Array>;
@@ -23,23 +21,25 @@ export function listVoices(): { id: string; label: string }[] {
 /** Messages échangés avec tts.worker.ts. */
 export type WorkerRequest =
   | { type: 'init'; id: number; voiceId: string }
-  | { type: 'speak'; id: number; text: string };
+  | { type: 'speak'; id: number; text: string }
+  /** Diagnostic : phonèmes seuls, sans modèle de voix. */
+  | { type: 'phonemize'; id: number; text: string; espeakVoice: string };
 export type WorkerResponse =
   | { type: 'progress'; id: number; ratio: number }
-  | { type: 'ready'; id: number }
-  | { type: 'audio'; id: number; wav: ArrayBuffer }
+  | { type: 'ready'; id: number; sampleRate: number }
+  | { type: 'audio'; id: number; pcm: Float32Array }
+  | { type: 'phonemes'; id: number; ids: number[] }
   | { type: 'error'; id: number; message: string };
 type RequestBody = WorkerRequest extends infer R ? (R extends unknown ? Omit<R, 'id'> : never) : never;
 
-/** Texte synthétisé à l'initialisation pour connaître la fréquence de la voix (et préchauffer). */
-const WARMUP_TEXT = 'Bonjour.';
+export const DOWNLOAD_ERROR = 'Impossible de télécharger la voix. Vérifie ta connexion et réessaie.';
 
 type Pending = { resolve: (r: WorkerResponse) => void; reject: (e: Error) => void; onProgress?: (ratio: number) => void };
 
 /**
  * Lance le moteur Piper dans un Web Worker. Télécharge la voix si besoin (onDownload
- * reçoit le ratio 0–1), puis synthétise une courte phrase : la fréquence d'échantillonnage
- * du moteur est celle de ce premier WAV.
+ * reçoit le ratio 0–1) ; la fréquence d'échantillonnage est celle du .onnx.json de la voix.
+ * Une erreur d'initialisation est rejetée avec DOWNLOAD_ERROR (erreur d'origine en `cause`).
  */
 export async function createWorkerEngine(
   voiceId: string,
@@ -83,32 +83,28 @@ export async function createWorkerEngine(
     });
   };
 
-  const speak = async (text: string) => {
-    const res = await request({ type: 'speak', text });
-    if (res.type !== 'audio') throw new Error('Réponse inattendue du moteur vocal');
-    return wavToPcm(res.wav);
-  };
-
   const dispose = () => {
     failAll(new Error('Moteur vocal arrêté'));
     worker.terminate();
   };
 
+  let sampleRate: number;
   try {
-    await request({ type: 'init', voiceId }, onDownload);
-    onDownload?.(1);
-    const { sampleRate } = await speak(WARMUP_TEXT);
-    return {
-      sampleRate,
-      async synthesize(text: string) {
-        const { pcm, sampleRate: sr } = await speak(text);
-        if (sr !== sampleRate) throw new Error(`Fréquence inattendue : ${sr} Hz au lieu de ${sampleRate} Hz`);
-        return pcm;
-      },
-      dispose,
-    };
+    const ready = await request({ type: 'init', voiceId }, onDownload);
+    if (ready.type !== 'ready') throw new Error('Réponse inattendue du moteur vocal');
+    sampleRate = ready.sampleRate;
   } catch (err) {
     dispose();
-    throw err;
+    throw new Error(DOWNLOAD_ERROR, { cause: err });
   }
+  onDownload?.(1);
+  return {
+    sampleRate,
+    async synthesize(text: string) {
+      const res = await request({ type: 'speak', text });
+      if (res.type !== 'audio') throw new Error('Réponse inattendue du moteur vocal');
+      return res.pcm;
+    },
+    dispose,
+  };
 }
