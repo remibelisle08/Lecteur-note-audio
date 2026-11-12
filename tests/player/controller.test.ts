@@ -6,26 +6,43 @@ import { bindMediaSession } from '../../src/player/mediaSession';
 import type { Chapter, Course, Note } from '../../src/types';
 
 class FakeAudio extends EventTarget {
-  currentTime = 0;
+  /** Comme Safari : currentTime lu à 0 tant que loadedmetadata n'a pas eu lieu (la valeur écrite est conservée). */
+  zeroBeforeMeta = true;
+  /** false : loadedmetadata n'est émis que par fireMeta(). */
+  autoMeta = true;
   duration = NaN;
   playbackRate = 1;
   preservesPitch = false;
   paused = true;
   durationFor = 100;
   private _src = '';
+  private _time = 0;
+  private _meta = false;
+  get currentTime() {
+    return this.zeroBeforeMeta && !this._meta ? 0 : this._time;
+  }
+  set currentTime(v: number) {
+    this._time = v;
+  }
   get src() {
     return this._src;
   }
   set src(v: string) {
     this._src = v;
-    this.currentTime = 0;
+    this._time = 0;
+    this._meta = false;
     this.duration = NaN;
-    if (v) {
+    if (v && this.autoMeta) {
       queueMicrotask(() => {
-        this.duration = this.durationFor;
-        this.dispatchEvent(new Event('loadedmetadata'));
+        if (this._src === v) this.fireMeta();
       });
     }
+  }
+  fireMeta() {
+    if (!this._src || this._meta) return;
+    this._meta = true;
+    this.duration = this.durationFor;
+    this.dispatchEvent(new Event('loadedmetadata'));
   }
   playError?: { name: string };
   play = vi.fn(async () => {
@@ -40,6 +57,8 @@ class FakeAudio extends EventTarget {
   });
   removeAttribute = vi.fn(() => {
     this._src = '';
+    this._meta = false;
+    this.duration = NaN;
   });
   load = vi.fn();
 }
@@ -243,6 +262,82 @@ describe('PlayerController', () => {
     ctrl.pause();
     await flush();
     expect((await lib.getProgress('n1'))?.positionSec).toBe(120);
+    ctrl.dispose();
+  });
+
+  it('reprise à 120 s sur un chapitre prêt : pause() avant loadedmetadata sauvegarde 120 s', async () => {
+    await seedNote('n1', 1);
+    await lib.saveProgress({ noteId: 'n1', chapterIndex: 0, positionSec: 120, completedChapterIds: [], updatedAt: 0 });
+    audio.autoMeta = false;
+    const ctrl = mk();
+    await ctrl.loadNote('n1');
+    expect(last(ctrl).position).toBe(120);
+    ctrl.pause();
+    await flush();
+    expect((await lib.getProgress('n1'))?.positionSec).toBe(120);
+    audio.fireMeta();
+    expect(audio.currentTime).toBe(120);
+    ctrl.dispose();
+  });
+
+  it('un chargement abandonné puis goTo hors limites ne bloquent pas la sauvegarde', async () => {
+    await seedNote('n1', 1);
+    await lib.saveChapter(chapter('n1-1', 'n1', 1, { audioDriveId: 'drv' }));
+    let release!: (b: Blob) => void;
+    const ctrl = mk(() => new Promise<Blob>((r) => (release = r)));
+    await ctrl.loadNote('n1');
+    await flush();
+    await ctrl.play();
+    const pending = ctrl.next();
+    await flush();
+    await ctrl.loadNote('absente');
+    await ctrl.goTo(99);
+    release(blob());
+    await pending;
+    await flush();
+    expect(last(ctrl).index).toBe(1);
+    audio.currentTime = 30;
+    ctrl.pause();
+    await flush();
+    expect(await lib.getProgress('n1')).toMatchObject({ chapterIndex: 1, positionSec: 30 });
+    ctrl.dispose();
+  });
+
+  it('chapitre en attente au chapitre sauvegardé : reprise automatique à la position sauvegardée', async () => {
+    await lib.saveNote(note('n1'));
+    await lib.saveChapter(chapter('n1-0', 'n1', 0, { audioStatus: 'generating' }));
+    await lib.saveProgress({ noteId: 'n1', chapterIndex: 0, positionSec: 120, completedChapterIds: [], updatedAt: 0 });
+    const ctrl = mk();
+    await ctrl.loadNote('n1');
+    await ctrl.play();
+    await lib.putAudio('n1-0', blob());
+    await lib.saveChapter(chapter('n1-0', 'n1', 0, { audioStatus: 'ready', audioLocal: true }));
+    await flush(40);
+    const s = last(ctrl);
+    expect(s.waitingForAudio).toBe(false);
+    expect(s.playing).toBe(true);
+    expect(audio.currentTime).toBe(120);
+    ctrl.dispose();
+  });
+
+  it('chapitre en attente différent du chapitre sauvegardé : reprise automatique à 0', async () => {
+    await seedNote('n1', 1);
+    await lib.saveChapter(chapter('n1-1', 'n1', 1, { audioStatus: 'generating' }));
+    await lib.saveProgress({ noteId: 'n1', chapterIndex: 0, positionSec: 50, completedChapterIds: [], updatedAt: 0 });
+    const ctrl = mk();
+    await ctrl.loadNote('n1');
+    await flush();
+    await ctrl.goTo(1);
+    expect(last(ctrl).waitingForAudio).toBe(true);
+    await lib.putAudio('n1-1', blob());
+    await lib.saveChapter(chapter('n1-1', 'n1', 1, { audioStatus: 'ready', audioLocal: true }));
+    await flush(40);
+    const s = last(ctrl);
+    expect(s.waitingForAudio).toBe(false);
+    expect(s.index).toBe(1);
+    expect(audio.src).not.toBe('');
+    expect(audio.currentTime).toBe(0);
+    expect(await lib.getProgress('n1')).toMatchObject({ chapterIndex: 1, positionSec: 0 });
     ctrl.dispose();
   });
 
