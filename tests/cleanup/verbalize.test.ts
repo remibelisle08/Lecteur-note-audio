@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { verbalize } from '../../src/cleanup/verbalize';
+import source from '../../src/cleanup/verbalize.ts?raw';
 
 describe('verbalize', () => {
   it.each([
@@ -20,5 +21,15 @@ describe('verbalize', () => {
     ['A', 'A'],
     ["L'ATP", "L'A T P"],
     ['Les acides gras entrent dans la cellule.', 'Les acides gras entrent dans la cellule.'],
-  ])('%s', (input, expected) => expect(verbalize(input)).toBe(expected));
+    ['Intro\n\n→ pyruvate', 'Intro\n\ndonne pyruvate'],
+    ['a\n\n= b', 'a\n\négale b'],
+    ['insuline ↑insuline', 'insuline augmente insuline'],
+    ['ex.lécithine', 'par exemple lécithine'],
+    ['GLUT12', 'glute 12'],
+    ['AB12', 'A B 12'],
+  ])('%j', (input, expected) => expect(verbalize(input)).toBe(expected));
+
+  it('n\'utilise aucune assertion lookbehind (Safari < 16.4)', () => {
+    expect(source).not.toContain('(?<');
+  });
 });
