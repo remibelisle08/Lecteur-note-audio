@@ -35,7 +35,6 @@ export interface Library {
   saveSettings(s: Settings): Promise<Settings>;
   recoverInterrupted(): Promise<number>;
   exportSnapshot(): Promise<Snapshot>;
-  applySnapshot(s: Snapshot): Promise<void>;
   /**
    * Fusionne un instantané distant dans une seule transaction : l'état local est relu dans la transaction,
    * seules les lignes modifiées sont écrites (les écritures concurrentes ne sont pas écrasées).
@@ -237,25 +236,6 @@ export async function openLibrary(name = 'lecteur-notes'): Promise<Library> {
         progress,
         tombstones,
       };
-    },
-    async applySnapshot(s) {
-      const tx = rw();
-      const local = new Map<string, boolean>();
-      for (const ch of await tx.objectStore('chapters').getAll()) local.set(ch.id, ch.audioLocal);
-      const keep = new Set(s.chapters.map((c) => c.id));
-      for (const id of local.keys()) if (!keep.has(id)) await tx.objectStore('audio').delete(id);
-      for (const store of ['courses', 'notes', 'chapters', 'progress', 'tombstones'] as const) {
-        await tx.objectStore(store).clear();
-      }
-      for (const c of s.courses) await tx.objectStore('courses').put(c);
-      for (const n of s.notes) await tx.objectStore('notes').put(n);
-      for (const c of s.chapters) {
-        await tx.objectStore('chapters').put({ ...c, audioLocal: local.get(c.id) ?? false });
-      }
-      for (const p of s.progress) await tx.objectStore('progress').put(p);
-      for (const t of s.tombstones) await tx.objectStore('tombstones').put(t);
-      await tx.done;
-      emit('library');
     },
     async mergeRemote(remote, merge = mergeSnapshots) {
       const tx = db.transaction(['courses', 'notes', 'chapters', 'progress', 'tombstones', 'audio'], 'readwrite');

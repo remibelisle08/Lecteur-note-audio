@@ -129,39 +129,6 @@ describe('library', () => {
     expect('audioLocal' in s.chapters[0]).toBe(false);
   });
 
-  it('applySnapshot remplace, préserve audioLocal, supprime l audio des chapitres tombés', async () => {
-    await lib.saveCourse(course('c1'));
-    await lib.saveCourse(course('old'));
-    await lib.saveNote(note('n1'));
-    await lib.saveChapter(chapter('k1', 'n1', 0));
-    await lib.saveChapter(chapter('k2', 'n1', 1));
-    await lib.putAudio('k1', blob());
-    await lib.putAudio('k2', blob());
-    const snap = await lib.exportSnapshot();
-    const remote = {
-      ...snap,
-      courses: snap.courses.filter((c) => c.id === 'c1'),
-      chapters: [
-        { ...snap.chapters.find((c) => c.id === 'k1')!, title: 'Distant' },
-        { ...snap.chapters.find((c) => c.id === 'k2')!, id: 'k3' },
-      ],
-      tombstones: [{ id: 'old', kind: 'course' as const, deletedAt: 5 }],
-    };
-    let events = 0;
-    lib.onChange(() => events++);
-    await lib.applySnapshot(remote);
-    expect(events).toBe(1);
-    expect((await lib.listCourses()).map((c) => c.id)).toEqual(['c1']);
-    const chs = await lib.listChapters('n1');
-    expect(chs.map((c) => c.id)).toEqual(['k1', 'k3']);
-    expect(chs[0].title).toBe('Distant');
-    expect(chs[0].audioLocal).toBe(true);
-    expect(chs[1].audioLocal).toBe(false);
-    expect(await lib.getAudio('k2')).toBeUndefined();
-    expect(await lib.getAudio('k1')).toBeDefined();
-    expect((await lib.exportSnapshot()).tombstones).toEqual(remote.tombstones);
-  });
-
   it('onChange : progress puis library, désabonnement', async () => {
     const seen: string[] = [];
     const off = lib.onChange((k) => seen.push(k));

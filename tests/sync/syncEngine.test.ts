@@ -111,7 +111,6 @@ describe('SyncEngine.syncNow', () => {
     await seedNote(lib);
     const drive = fakeDrive('{oops');
     const engine = new SyncEngine(lib, drive.api, settings());
-    const applySpy = vi.spyOn(lib, 'applySnapshot');
     const mergeSpy = vi.spyOn(lib, 'mergeRemote');
     const statuses: SyncStatus[] = [];
     engine.onStatus((s) => statuses.push(s));
@@ -125,7 +124,6 @@ describe('SyncEngine.syncNow', () => {
     expect(drive.api.writeLibrary).not.toHaveBeenCalled();
     expect(drive.api.uploadAudio).not.toHaveBeenCalled();
     expect(drive.api.deleteFile).not.toHaveBeenCalled();
-    expect(applySpy).not.toHaveBeenCalled();
     expect(mergeSpy).not.toHaveBeenCalled();
   });
 
