@@ -29,6 +29,11 @@ async function load(): Promise<PdfjsModule> {
 /** Ouvre un PDF ; pdf.js peut détacher le tampon reçu, on lui passe une copie. */
 export async function openPdf(data: ArrayBuffer) {
   const pdfjs = await getPdfjs();
-  return pdfjs.getDocument({ data: new Uint8Array(data.slice(0)), verbosity: pdfjs.VerbosityLevel.ERRORS })
-    .promise;
+  const task = pdfjs.getDocument({ data: new Uint8Array(data.slice(0)), verbosity: pdfjs.VerbosityLevel.ERRORS });
+  try {
+    return await task.promise;
+  } catch (e) {
+    await task.destroy(); // fichier illisible : libérer le worker
+    throw e;
+  }
 }

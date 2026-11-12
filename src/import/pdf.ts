@@ -64,6 +64,6 @@ export async function pdfToBlocks(
     const pageCount = doc.numPages;
     return { blocks, pageCount, needsOcr: totalChars / pageCount < MIN_CHARS_PER_PAGE };
   } finally {
-    await doc.destroy();
+    await doc.loadingTask.destroy(); // pdf.js 6 : la destruction passe par la tâche de chargement
   }
 }

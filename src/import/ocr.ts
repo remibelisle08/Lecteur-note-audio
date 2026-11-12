@@ -89,6 +89,6 @@ export async function ocrPdf(
     return { blocks, meanConfidence: confCount ? confSum / confCount : 0 };
   } finally {
     await worker.terminate();
-    await doc.destroy();
+    await doc.loadingTask.destroy(); // pdf.js 6 : la destruction passe par la tâche de chargement
   }
 }
