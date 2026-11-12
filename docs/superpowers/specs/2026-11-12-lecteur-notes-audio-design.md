@@ -40,6 +40,7 @@ Statut : en revue
 | Synchro | Google Drive REST v3, portée `drive.file` | Gratuit (15 Go), chaque utilisateur a son Drive ; portée non sensible (accès limité aux fichiers créés par l'app) |
 | Stack | Vite + React + TypeScript, Vitest, `vite-plugin-pwa` | Répandu, lisible, outillage PWA mature |
 | Extraction | `pdfjs-dist` (PDF), `mammoth` (.docx) | Standards, maintenus, gratuits |
+| OCR | `tesseract.js` + données `fra`, dans un Web Worker | 2 des 3 PDF d'exemple n'ont aucun texte (« Microsoft Print to PDF » vectorise les glyphes). Testé : ~3 s/page, confiance ~90 % |
 
 **Rejetés :** voix payantes (OpenAI, ElevenLabs), Google Cloud TTS (carte de crédit), voix Edge (usage non officiel, fragile), Supabase (pause après 7 jours d'inactivité, 1 Go), clonage de voix (trop lourd), Kokoro (support français limité dans `kokoro-js`).
 
@@ -59,7 +60,9 @@ src/
 ```
 
 ### 3.1 Import
-- **PDF** (`pdfjs-dist`) : extrait chaque élément de texte avec page, position verticale, taille de police. Si le texte total < ~50 caractères par page en moyenne → erreur « PDF numérisé ».
+- **PDF** (`pdfjs-dist`) : extrait chaque élément de texte avec page, position verticale, taille de police.
+- **PDF sans texte** (moins de ~50 caractères extraits par page) : bascule automatique en **OCR**. Chaque page est rendue en image (pdf.js, ~200 dpi) puis reconnue par Tesseract (français). Les lignes OCR deviennent des `RawBlock` ; la hauteur de ligne sert d'approximation de la taille de police pour détecter les titres. Progression affichée par page. Données de langue (~10 Mo) téléchargées une fois et mises en cache.
+- L'OCR peut aussi être forcé manuellement depuis l'aperçu (« Le texte semble incorrect ? Réessayer avec la reconnaissance de texte »).
 - **DOCX** (`mammoth`) : conversion en HTML sémantique ; `h1`–`h3` deviennent des candidats de titres.
 - `.doc` (ancien format) non supporté : message demandant de réenregistrer en `.docx`.
 - Sortie commune : `RawBlock[]` = `{ text, kind: 'heading'|'paragraph', level?, page?, fontSize?, y? }`.
@@ -69,8 +72,20 @@ src/
 - Retirer les numéros de page isolés (`12`, `- 12 -`, `Page 12 de 40`).
 - Recoller les mots coupés en fin de ligne (`ap-\nprentissage` → `apprentissage`) et les lignes d'un même paragraphe.
 - Normaliser espaces, puces, guillemets ; remplacer URL longues par « lien ».
+- **Artefacts OCR** : retirer les symboles parasites en début de paragraphe (pastilles de numéros de diapo, ex. `Œ2`, `ŒZ)`, `©`), les lignes de moins de 3 caractères alphabétiques.
+- **Diapos à apparition progressive** : si le texte d'une page est contenu (après normalisation) dans celui de la page suivante, la page est supprimée. Seule la version la plus complète est gardée.
+- **Titres répétés** : pages consécutives partageant le même titre (ex. « Introduction » × 5) → un seul chapitre ; le titre répété n'est lu qu'une fois.
+- **Légendes d'images** courtes isolées (ex. « Mayonnaise, exemple d'émulsion ») : conservées mais signalées à l'aperçu.
 - **Chapitres** : DOCX → titres `h1`/`h2`. PDF → lignes dont la taille de police est nettement supérieure au corps du texte (≥ 1,2× la médiane) et courtes. Aucun titre détecté → découpage en sections d'environ 10 minutes aux limites de paragraphes.
+- DOCX : `h1` = chapitres, `h2` = repères annoncés dans l'audio (titre lu avec une courte pause avant).
 - Chaque chapitre : `{ title, text, included: true }`.
+
+### 3.2 bis Mode quiz mains libres
+- Détection du modèle question/pause/réponse (calibré sur le script Word fourni) : une ligne de question (`À toi :` ou finissant par `?`) suivie d'une consigne de pause (`Mets sur pause…`, `Pause…`, `Réfléchis…`).
+- La consigne de pause est remplacée par un **silence fixe** inséré dans l'audio (réglage 3 à 15 s, défaut 8 s), précédé d'un court signal sonore. La réponse est lue ensuite.
+- Réglages : durée du silence ; lire ou non la consigne « Mets sur pause » ; activer/désactiver le mode quiz par note (activé automatiquement si le modèle est détecté).
+- L'aperçu affiche les questions détectées (icône ❓) pour vérification.
+- Le silence fait partie du MP3 : fonctionne écran verrouillé et en auto, sans aucune interaction.
 
 ### 3.3 Voix (TTS)
 - Exécuté dans un **Web Worker** pour ne pas figer l'interface.
@@ -122,7 +137,8 @@ AudioBlob { chapterId, blob }   // magasin séparé
 
 | Situation | Comportement |
 |---|---|
-| PDF numérisé (pas de texte) | Message clair, note non créée |
+| PDF sans texte (numérisé ou « imprimé en PDF ») | OCR automatique, avec progression ; message si l'OCR ne trouve rien non plus |
+| OCR de faible confiance (< 70 %) | Avertissement à l'aperçu, pages concernées signalées |
 | Fichier corrompu / non supporté | Message par fichier, le reste du lot continue |
 | Génération interrompue | Reprise au premier chapitre non prêt |
 | Espace plein | Avertissement + proposition de libérer l'audio local des notes écoutées (si Drive) |
@@ -137,7 +153,7 @@ AudioBlob { chapterId, blob }   // magasin séparé
 - **Intégration** : import réel d'un petit PDF et d'un petit DOCX de test (fixtures dans `tests/fixtures/`).
 - **Bout en bout (Playwright, Chromium)** : ajout d'une note → aperçu → génération d'un court chapitre → lecture.
 - **Manuels sur appareil réel** (avec l'utilisateur) : écran verrouillé iOS/Android, contrôles auto/Bluetooth, synchro ordi → téléphone, installation PWA.
-- Calibration du nettoyage avec 2–3 vraies notes de l'utilisateur si fournies.
+- **Calibration avec les notes réelles fournies** (Chapitre 4, lipides) : PDF diaporama avec diapos progressives (texte), 2 PDF « Microsoft Print to PDF » sans texte (OCR), script Word de balado avec quiz. Des extraits (non les fichiers complets, pour ne pas publier le contenu de cours dans un dépôt public) servent de jeux d'essai.
 
 ## 7. Déploiement et partage
 
@@ -146,12 +162,15 @@ AudioBlob { chapterId, blob }   // magasin séparé
 - `README.md` en français : utilisation, installation sur iPhone/Android, guide pas à pas de création du projet Google Cloud (ID client OAuth, origine autorisée = URL GitHub Pages), et comment partager.
 - L'ID client OAuth est public par nature (application côté client) ; il est placé dans la configuration de build.
 
+## 7 bis. Question ouverte
+
+- Dépôt public (GitHub Pages gratuit) **ou** privé → hébergement sur Cloudflare Pages (gratuit avec dépôt privé). Par défaut : GitHub Pages ; à confirmer par l'utilisateur.
+
 ## 8. Hors portée v1 — prévu en V2
 
 - **Texte synchronisé** : surlignage de la phrase en cours de lecture (façon Speechify).
 - **Signets** : marquer un passage pour le réécouter.
 - **Minuterie de sommeil**.
-- OCR des PDF numérisés (Tesseract.js, gratuit).
 - Import direct depuis un dossier Google Drive.
 
 Hors portée (exigerait une IA payante) : résumés, quiz, format balado à deux voix.
@@ -162,4 +181,5 @@ Hors portée (exigerait une IA payante) : résumés, quiz, format balado à deux
 - **Qualité du nettoyage PDF** : variable selon la mise en page. Mitigation : étape d'aperçu/édition.
 - **Tableaux et formules** : lus maladroitement. Mitigation : exclusion à l'aperçu.
 - **Écran « app non vérifiée » Google** : peu probable avec `drive.file` (portée non sensible), à confirmer à la configuration.
+- **Qualité OCR** : bonne sur des pages nettes, mauvaise sur les schémas. Mitigation : exclusion à l'aperçu ; conseil « Enregistrer sous PDF » plutôt que « Imprimer en PDF » dans l'app.
 - **Dépendance Piper web** : librairie communautaire ; isolée derrière l'interface du module `tts/` pour pouvoir la remplacer.
