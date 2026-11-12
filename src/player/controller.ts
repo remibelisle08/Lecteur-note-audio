@@ -37,6 +37,7 @@ export class PlayerController {
   private wantPlay = false;
   private waiting = false;
   private error?: string;
+  private loading = false;
   private rate = 1;
   private rateTouched = false;
   private objectUrl?: string;
@@ -180,6 +181,7 @@ export class PlayerController {
     this.error = undefined;
     this.audio.pause();
     this.index = i;
+    this.loading = true;
     try {
       const ch = this.chapters[i];
       const blob = await this.resolveBlob(ch);
@@ -188,10 +190,12 @@ export class PlayerController {
         this.releaseUrl();
         this.clearSource();
         this.waiting = true;
+        this.loading = false;
         this.emit();
         return;
       }
       this.waiting = false;
+      this.loading = false;
       this.releaseUrl();
       this.objectUrl = URL.createObjectURL(blob);
       this.audio.src = this.objectUrl;
@@ -215,6 +219,7 @@ export class PlayerController {
       this.playing = false;
       this.wantPlay = false;
       this.waiting = false;
+      this.loading = false;
       this.releaseUrl();
       this.clearSource();
       this.error = LOAD_ERROR;
@@ -248,7 +253,10 @@ export class PlayerController {
         }
         if (!fresh || my !== this.token) break;
         this.chapters[this.index] = fresh;
-        if (fresh.audioStatus === 'ready') await this.loadIndex(this.index, 0, my);
+        if (fresh.audioStatus === 'ready') {
+          const p = this.progress.get(fresh.noteId);
+          await this.loadIndex(this.index, p && p.chapterIndex === fresh.index ? p.positionSec : 0, my);
+        }
       } while (this.retryAgain);
     } finally {
       this.retrying = false;
@@ -409,13 +417,15 @@ export class PlayerController {
 
   private async persist(): Promise<void> {
     try {
+      // Sans audio chargé (attente, erreur, chargement en cours), la position sauvegardée reste intacte.
+      if (this.waiting || this.error || this.loading) return;
       const ch = this.chapters[this.index];
       if (!ch) return;
       const prev = this.progress.get(ch.noteId);
       const next: Progress = {
         noteId: ch.noteId,
         chapterIndex: ch.index,
-        positionSec: this.waiting || this.error ? 0 : this.audio.currentTime || 0,
+        positionSec: this.audio.currentTime || 0,
         completedChapterIds: prev?.completedChapterIds ?? [],
         updatedAt: Date.now(),
       };

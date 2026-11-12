@@ -234,6 +234,18 @@ describe('PlayerController', () => {
     ctrl.dispose();
   });
 
+  it('chapitre non prêt repris à 120 s : pause() ne perd pas la position sauvegardée', async () => {
+    await lib.saveNote(note('n1'));
+    await lib.saveChapter(chapter('n1-0', 'n1', 0, { audioStatus: 'generating' }));
+    await lib.saveProgress({ noteId: 'n1', chapterIndex: 0, positionSec: 120, completedChapterIds: [], updatedAt: 0 });
+    const ctrl = mk();
+    await ctrl.loadNote('n1');
+    ctrl.pause();
+    await flush();
+    expect((await lib.getProgress('n1'))?.positionSec).toBe(120);
+    ctrl.dispose();
+  });
+
   it('utilise removeAttribute(src) + load() quand le chapitre n’est pas prêt', async () => {
     await lib.saveNote(note('n1'));
     await lib.saveChapter(chapter('n1-0', 'n1', 0, { audioStatus: 'pending' }));
