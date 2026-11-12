@@ -5,7 +5,7 @@ import type { DriveControl } from '../sync/driveSync';
 import type { PlayerController } from '../player/controller';
 import type { TtsEngine } from '../tts/engine';
 import type { Generator } from '../tts/generator';
-import { GenerationStore } from './generationStore';
+import { generationStoreFor, type GenerationStore } from './generationStore';
 import { Toasts, type Toast } from './components/Toasts';
 import { useDriveState } from './hooks/useDrive';
 
@@ -50,21 +50,11 @@ export type AppContextValue = AppServices & {
 
 const Ctx = createContext<AppContextValue | null>(null);
 
-/** Un seul magasin par générateur, abonné pour toute la durée de l'app (pas de doublon en StrictMode). */
-const stores = new WeakMap<GeneratorLike, GenerationStore>();
-function storeFor(generator: GeneratorLike): GenerationStore {
-  let store = stores.get(generator);
-  if (!store) {
-    store = new GenerationStore((l) => generator.onProgress(l));
-    stores.set(generator, store);
-  }
-  return store;
-}
 
 export function AppProvider({ services, children }: { services: AppServices; children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const nextId = useRef(1);
-  const generation = storeFor(services.generator);
+  const generation = generationStoreFor(services.generator);
   const driveState = useDriveState(services.drive);
   const driveConnected = services.driveConnected || driveState.connected;
 

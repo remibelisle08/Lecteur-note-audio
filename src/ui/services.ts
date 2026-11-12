@@ -7,6 +7,7 @@ import { createWorkerEngine, type TtsEngine } from '../tts/engine';
 import { Generator } from '../tts/generator';
 import type { AppServices, ImportFn } from './AppContext';
 import { EngineCache } from './engineCache';
+import { generationStoreFor } from './generationStore';
 
 declare global {
   interface Window {
@@ -26,6 +27,8 @@ export function createServices(lib: Library): AppServices & { generator: Generat
     return testEngine ? Promise.resolve(testEngine) : engines.get(voiceId);
   };
   const generator = new Generator(lib, getEngine);
+  // Abonné tout de suite : les évènements de resumeAll (lancé avant le premier rendu) ne sont pas perdus.
+  generationStoreFor(generator);
   const audio = new Audio();
   audio.preload = 'auto';
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;

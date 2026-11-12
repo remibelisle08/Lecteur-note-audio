@@ -1,4 +1,4 @@
-import type { GeneratorEvent } from '../tts/generator';
+import type { Generator, GeneratorEvent } from '../tts/generator';
 import type { AudioStatus, Chapter } from '../types';
 
 export type NoteGeneration = {
@@ -45,6 +45,20 @@ export class GenerationStore {
       this.listeners.delete(l);
     };
   };
+}
+
+/**
+ * Un seul magasin par générateur, abonné pour toute la durée de l'app (pas de doublon en StrictMode).
+ * Créé dès createServices, avant la reprise des générations : aucun évènement n'est perdu avant le rendu.
+ */
+const stores = new WeakMap<Pick<Generator, 'onProgress'>, GenerationStore>();
+export function generationStoreFor(generator: Pick<Generator, 'onProgress'>): GenerationStore {
+  let store = stores.get(generator);
+  if (!store) {
+    store = new GenerationStore((l) => generator.onProgress(l));
+    stores.set(generator, store);
+  }
+  return store;
 }
 
 /** Avancement global (0–1) d'une note sur ses chapitres inclus : évènements en direct, sinon état en base. */
