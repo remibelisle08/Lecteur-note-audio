@@ -26,3 +26,11 @@ export function formatBytes(bytes: number): string {
 
 /** Message d'une erreur inattendue → texte français à afficher. */
 export const FALLBACK_ERROR = 'Une erreur est survenue. Réessaie.';
+
+/** Heure de la dernière synchro : « 14 h 32 » aujourd'hui, sinon « 11 nov. à 14 h 32 ». */
+export function formatSyncTime(ts: number, now = Date.now()): string {
+  const d = new Date(ts);
+  const time = `${d.getHours()} h ${String(d.getMinutes()).padStart(2, '0')}`;
+  if (d.toDateString() === new Date(now).toDateString()) return time;
+  return `${d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} à ${time}`;
+}

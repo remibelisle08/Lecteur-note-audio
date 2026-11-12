@@ -1,6 +1,8 @@
 import type { Library } from '../library/db';
 import { PlayerController } from '../player/controller';
 import { bindMediaSession } from '../player/mediaSession';
+import { createDriveClient } from '../sync/driveClient';
+import { createDriveSync } from '../sync/driveSync';
 import { createWorkerEngine, type TtsEngine } from '../tts/engine';
 import { Generator } from '../tts/generator';
 import type { AppServices, ImportFn } from './AppContext';
@@ -26,7 +28,10 @@ export function createServices(lib: Library): AppServices & { generator: Generat
   const generator = new Generator(lib, getEngine);
   const audio = new Audio();
   audio.preload = 'auto';
-  const player = new PlayerController(audio, lib);
+  const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+  const drive = createDriveSync(lib, clientId ? createDriveClient(clientId) : null);
+  // Fonction stable : le lecteur est créé une fois, la connexion Drive peut changer ensuite.
+  const player = new PlayerController(audio, lib, (ch) => drive.fetchRemoteAudio(ch));
   bindMediaSession(player);
   return {
     lib,
@@ -38,5 +43,6 @@ export function createServices(lib: Library): AppServices & { generator: Generat
     releaseEngines: (keep) => engines.release(keep),
     sourceFiles: new Map(),
     driveConnected: false,
+    drive,
   };
 }

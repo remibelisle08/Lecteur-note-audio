@@ -5,14 +5,17 @@ import { DOWNLOAD_ERROR, listVoices } from '../../tts/engine';
 import type { Settings } from '../../types';
 import { useApp } from '../AppContext';
 import { BackLink } from '../components/BackLink';
-import { FALLBACK_ERROR, formatBytes, formatRate } from '../format';
+import { FALLBACK_ERROR, formatBytes, formatRate, formatSyncTime } from '../format';
 import { freeListenedAudio, freedMessage } from '../freeAudio';
+import { useDriveState } from '../hooks/useDrive';
 
 const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2];
 const SAMPLE_TEXT = 'Bonjour ! Voici un aperçu de cette voix pour écouter tes notes de cours.';
 const SAMPLE_BUSY = 'Patiente jusqu’à la fin de la génération pour écouter un échantillon.';
 const SAVE_ERROR = 'Impossible d’enregistrer ce réglage. Réessaie.';
 export const SAMPLE_PLAY_ERROR = 'Impossible de lire l’échantillon.';
+export const DRIVE_NOT_CONFIGURED = "La synchro Drive n'est pas configurée sur cette installation (voir README).";
+export const DRIVE_CONNECT_ERROR = 'Connexion à Google Drive impossible. Réessaie.';
 
 function useStorageEstimate(): string | undefined {
   const [text, setText] = useState<string>();
@@ -40,7 +43,6 @@ export function SettingsScreen() {
   const sampleAudio = useRef<HTMLAudioElement>();
   const storage = useStorageEstimate();
   const voices = listVoices();
-  const driveConfigured = !!import.meta.env.VITE_GOOGLE_CLIENT_ID;
 
   useEffect(() => {
     lib.getSettings().then(setSettings, () => notify('Impossible de lire tes réglages.'));
@@ -169,14 +171,7 @@ export function SettingsScreen() {
         </label>
       </section>
 
-      <section className="card stack" aria-labelledby="s-drive">
-        <h2 id="s-drive">Google Drive</h2>
-        <p className="muted">
-          {driveConfigured
-            ? 'Bientôt disponible'
-            : "La synchro Drive n'est pas configurée sur cette installation (voir README)."}
-        </p>
-      </section>
+      <DriveSection />
 
       <section className="card stack" aria-labelledby="s-storage">
         <h2 id="s-storage">Stockage</h2>
@@ -188,5 +183,73 @@ export function SettingsScreen() {
         )}
       </section>
     </>
+  );
+}
+
+function DriveSection() {
+  const { drive, notify } = useApp();
+  const { configured, connected, status } = useDriveState(drive);
+  const [connecting, setConnecting] = useState(false);
+
+  const connect = async () => {
+    if (!drive) return;
+    setConnecting(true);
+    try {
+      await drive.connect();
+    } catch {
+      notify(DRIVE_CONNECT_ERROR);
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  let body: JSX.Element;
+  if (!drive || !configured) {
+    body = <p className="muted">{DRIVE_NOT_CONFIGURED}</p>;
+  } else if (!connected) {
+    body = (
+      <>
+        <p className="muted">
+          Retrouve ta bibliothèque et tes audios sur tous tes appareils, dans un dossier « Lecteur de notes » de ton
+          Google Drive.
+        </p>
+        <button type="button" className="btn btn-primary" disabled={connecting} onClick={() => void connect()}>
+          Connecter Google Drive
+        </button>
+      </>
+    );
+  } else {
+    const syncing = status.state === 'syncing';
+    body = (
+      <>
+        <p>
+          {syncing
+            ? 'Synchronisation en cours…'
+            : status.lastSyncAt
+              ? `Dernière synchro : ${formatSyncTime(status.lastSyncAt)}`
+              : 'Pas encore synchronisé.'}
+        </p>
+        {status.message && (status.state === 'error' || status.state === 'auth-required') && (
+          <p className="error" role="alert">
+            {status.message}
+          </p>
+        )}
+        <div className="row">
+          <button type="button" className="btn" disabled={syncing} onClick={() => void drive.syncNow()}>
+            Synchroniser maintenant
+          </button>
+          <button type="button" className="btn" onClick={() => drive.disconnect()}>
+            Déconnecter
+          </button>
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <section className="card stack" aria-labelledby="s-drive">
+      <h2 id="s-drive">Google Drive</h2>
+      {body}
+    </section>
   );
 }

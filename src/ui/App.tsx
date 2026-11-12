@@ -1,15 +1,16 @@
 import { useEffect } from 'react';
-import { AppProvider, type AppServices } from './AppContext';
+import { AppProvider, useApp, type AppServices } from './AppContext';
 import { MiniPlayer } from './components/MiniPlayer';
 import { usePlayerHasItem } from './hooks/usePlayerState';
 import { VoiceDownload } from './components/VoiceDownload';
+import { useDriveState } from './hooks/useDrive';
 import { useRoute, type Route } from './routes';
 import { CourseScreen } from './screens/CourseScreen';
 import { ImportScreen } from './screens/ImportScreen';
 import { LibraryScreen } from './screens/LibraryScreen';
 import { PlayerScreen } from './screens/PlayerScreen';
 import { PreviewScreen } from './screens/PreviewScreen';
-import { SettingsScreen } from './screens/SettingsScreen';
+import { DRIVE_CONNECT_ERROR, SettingsScreen } from './screens/SettingsScreen';
 import './styles.css';
 
 function Screen({ route }: { route: Route }) {
@@ -29,6 +30,24 @@ function Screen({ route }: { route: Route }) {
   }
 }
 
+/** Bandeau quand l'autorisation Drive a expiré : la lecture continue, seule la synchro attend. */
+function DriveReconnect() {
+  const { drive, notify } = useApp();
+  const { connected, status } = useDriveState(drive);
+  if (!drive || !connected || status.state !== 'auth-required') return null;
+  const reconnect = () => {
+    drive.connect().catch(() => notify(DRIVE_CONNECT_ERROR));
+  };
+  return (
+    <div className="banner banner-row" role="status">
+      <span>Synchro Drive en pause.</span>
+      <button type="button" className="btn" onClick={reconnect}>
+        Reconnecter Drive
+      </button>
+    </div>
+  );
+}
+
 function Shell() {
   const route = useRoute();
   const hasItem = usePlayerHasItem();
@@ -40,6 +59,7 @@ function Shell() {
   return (
     <>
       <VoiceDownload />
+      <DriveReconnect />
       <main className={`screen${mini ? ' has-mini' : ''}`}>
         <Screen route={route} />
       </main>

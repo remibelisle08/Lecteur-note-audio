@@ -1,11 +1,13 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { ImportResult } from '../import';
 import type { Library } from '../library/db';
+import type { DriveControl } from '../sync/driveSync';
 import type { PlayerController } from '../player/controller';
 import type { TtsEngine } from '../tts/engine';
 import type { Generator } from '../tts/generator';
 import { GenerationStore } from './generationStore';
 import { Toasts, type Toast } from './components/Toasts';
+import { useDriveState } from './hooks/useDrive';
 
 export type ImportFn = (
   file: File,
@@ -34,8 +36,10 @@ export interface AppServices {
   releaseEngines?: (keepVoiceId: string) => void;
   /** Fichiers importés pendant cette session, par note (pour relancer avec l'OCR). */
   sourceFiles: Map<string, File>;
-  /** Drive connecté (branché par la synchro Drive). */
+  /** Drive connecté (forcé à vrai ; sinon déduit de `drive`). */
   driveConnected: boolean;
+  /** Synchro Google Drive (absente → non configurée). */
+  drive?: DriveControl;
 }
 
 export type AppContextValue = AppServices & {
@@ -61,6 +65,8 @@ export function AppProvider({ services, children }: { services: AppServices; chi
   const [toasts, setToasts] = useState<Toast[]>([]);
   const nextId = useRef(1);
   const generation = storeFor(services.generator);
+  const driveState = useDriveState(services.drive);
+  const driveConnected = services.driveConnected || driveState.connected;
 
   const dismiss = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
   const notify = useCallback(
@@ -72,7 +78,10 @@ export function AppProvider({ services, children }: { services: AppServices; chi
     [dismiss],
   );
 
-  const value = useMemo(() => ({ ...services, generation, notify }), [services, generation, notify]);
+  const value = useMemo(
+    () => ({ ...services, driveConnected, generation, notify }),
+    [services, driveConnected, generation, notify],
+  );
   return (
     <Ctx.Provider value={value}>
       {children}
