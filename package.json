@@ -11,6 +11,8 @@
     "e2e": "echo \"Aucun test e2e configuré pour l'instant\""
   },
   "dependencies": {
+    "@breezystack/lamejs": "1.2.7",
+    "@diffusionstudio/vits-web": "1.0.3",
     "mammoth": "1.13.0",
     "pdfjs-dist": "5.7.284",
     "react": "18.3.1",
