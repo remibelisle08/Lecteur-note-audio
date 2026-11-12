@@ -1,7 +1,7 @@
 # Lecteur de notes audio — Design (v1)
 
 Date : 2026-11-12
-Statut : en revue
+Statut : approuvé
 
 ## 1. Intention
 
@@ -158,13 +158,9 @@ AudioBlob { chapterId, blob }   // magasin séparé
 ## 7. Déploiement et partage
 
 - GitHub Actions : build + tests à chaque push ; déploiement GitHub Pages depuis `main`.
-- Dépôt public requis (plan GitHub gratuit). Aucune donnée utilisateur dans le dépôt.
+- Dépôt public (confirmé par l'utilisateur). Aucune donnée utilisateur dans le dépôt.
 - `README.md` en français : utilisation, installation sur iPhone/Android, guide pas à pas de création du projet Google Cloud (ID client OAuth, origine autorisée = URL GitHub Pages), et comment partager.
 - L'ID client OAuth est public par nature (application côté client) ; il est placé dans la configuration de build.
-
-## 7 bis. Question ouverte
-
-- Dépôt public (GitHub Pages gratuit) **ou** privé → hébergement sur Cloudflare Pages (gratuit avec dépôt privé). Par défaut : GitHub Pages ; à confirmer par l'utilisateur.
 
 ## 8. Hors portée v1 — prévu en V2
 
