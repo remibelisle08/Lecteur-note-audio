@@ -1,0 +1,196 @@
+import 'fake-indexeddb/auto';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { openLibrary, newId, type Library } from '../../src/library/db';
+import { DEFAULT_SETTINGS, type Chapter, type Course, type Note } from '../../src/types';
+
+let n = 0;
+let lib: Library;
+beforeEach(async () => {
+  lib = await openLibrary('test-' + n++);
+});
+
+const course = (id: string, order = 0): Course => ({ id, name: 'Cours ' + id, order, updatedAt: 0 });
+const note = (id: string, courseId = 'c1', order = 0): Note => ({
+  id, courseId, title: 'Note ' + id, sourceFileName: id + '.pdf', order, createdAt: 1, updatedAt: 0,
+  status: 'ready', quizMode: false, usedOcr: false,
+});
+const chapter = (id: string, noteId: string, index: number, over: Partial<Chapter> = {}): Chapter => ({
+  id, noteId, index, title: 'Ch ' + id, text: 'texte', included: true,
+  audioStatus: 'ready', audioLocal: false, updatedAt: 0, ...over,
+});
+const blob = () => new Blob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/mpeg' });
+
+describe('library', () => {
+  it('newId renvoie des identifiants distincts', () => {
+    expect(newId()).not.toBe(newId());
+  });
+
+  it('CRUD cours trié par order, updatedAt posé sans muter', async () => {
+    const b = course('b', 2);
+    await lib.saveCourse(b);
+    const a = await lib.saveCourse(course('a', 1));
+    expect(b.updatedAt).toBe(0);
+    expect(a.updatedAt).toBeGreaterThan(0);
+    expect((await lib.listCourses()).map((c) => c.id)).toEqual(['a', 'b']);
+  });
+
+  it('notes par cours, getNote, chapitres triés par index', async () => {
+    await lib.saveNote(note('n1'));
+    await lib.saveNote(note('n2', 'c2'));
+    expect((await lib.listNotes('c1')).map((x) => x.id)).toEqual(['n1']);
+    expect((await lib.getNote('n1'))?.title).toBe('Note n1');
+    expect(await lib.getNote('zz')).toBeUndefined();
+    await lib.saveChapter(chapter('k2', 'n1', 1));
+    await lib.saveChapter(chapter('k1', 'n1', 0));
+    expect((await lib.listChapters('n1')).map((x) => x.id)).toEqual(['k1', 'k2']);
+  });
+
+  it('putAudio / getAudio / deleteAudio basculent audioLocal sans toucher updatedAt', async () => {
+    const saved = await lib.saveChapter(chapter('k1', 'n1', 0));
+    await lib.putAudio('k1', blob());
+    let ch = (await lib.listChapters('n1'))[0];
+    expect(ch.audioLocal).toBe(true);
+    expect(ch.updatedAt).toBe(saved.updatedAt);
+    const got = await lib.getAudio('k1');
+    expect(got?.type).toBe('audio/mpeg');
+    expect(got?.size).toBe(4);
+    await lib.deleteAudio('k1');
+    ch = (await lib.listChapters('n1'))[0];
+    expect(ch.audioLocal).toBe(false);
+    expect(await lib.getAudio('k1')).toBeUndefined();
+  });
+
+  it('putAudio sans ligne de chapitre : aucun audio stocké', async () => {
+    let events = 0;
+    lib.onChange(() => events++);
+    await lib.putAudio('fantome', blob());
+    expect(await lib.getAudio('fantome')).toBeUndefined();
+    expect(await lib.listChapters('n1')).toEqual([]);
+    expect(events).toBe(0);
+  });
+
+  it('deleteNote cascade chapitres, audio, progression + tombstones', async () => {
+    await lib.saveNote(note('n1'));
+    await lib.saveChapter(chapter('k1', 'n1', 0));
+    await lib.putAudio('k1', blob());
+    await lib.saveProgress({ noteId: 'n1', chapterIndex: 0, positionSec: 3, completedChapterIds: [], updatedAt: 0 });
+    await lib.deleteNote('n1');
+    expect(await lib.getNote('n1')).toBeUndefined();
+    expect(await lib.listChapters('n1')).toEqual([]);
+    expect(await lib.getAudio('k1')).toBeUndefined();
+    expect(await lib.getProgress('n1')).toBeUndefined();
+    const snap = await lib.exportSnapshot();
+    expect(snap.tombstones.map((t) => t.kind + ':' + t.id).sort()).toEqual(['chapter:k1', 'note:n1']);
+  });
+
+  it('deleteCourse cascade vers les notes', async () => {
+    await lib.saveCourse(course('c1'));
+    await lib.saveNote(note('n1'));
+    await lib.saveChapter(chapter('k1', 'n1', 0));
+    await lib.deleteCourse('c1');
+    expect(await lib.listCourses()).toEqual([]);
+    expect(await lib.listNotes('c1')).toEqual([]);
+    expect(await lib.listChapters('n1')).toEqual([]);
+    const t = (await lib.exportSnapshot()).tombstones.map((x) => x.kind + ':' + x.id).sort();
+    expect(t).toEqual(['chapter:k1', 'course:c1', 'note:n1']);
+  });
+
+  it('deleteChapter supprime audio et pose un tombstone', async () => {
+    await lib.saveChapter(chapter('k1', 'n1', 0));
+    await lib.putAudio('k1', blob());
+    await lib.deleteChapter('k1');
+    expect(await lib.getAudio('k1')).toBeUndefined();
+    expect((await lib.exportSnapshot()).tombstones.map((t) => t.id)).toEqual(['k1']);
+  });
+
+  it('settings : défaut puis fusion', async () => {
+    expect(await lib.getSettings()).toEqual(DEFAULT_SETTINGS);
+    await lib.saveSettings({ ...DEFAULT_SETTINGS, defaultRate: 1.5 });
+    expect((await lib.getSettings()).defaultRate).toBe(1.5);
+  });
+
+  it('recoverInterrupted remet les chapitres generating en pending', async () => {
+    await lib.saveNote({ ...note('n1'), status: 'generating' });
+    await lib.saveChapter(chapter('k1', 'n1', 0, { audioStatus: 'generating' }));
+    await lib.saveChapter(chapter('k2', 'n1', 1, { audioStatus: 'generating' }));
+    await lib.saveChapter(chapter('k3', 'n1', 2, { audioStatus: 'ready' }));
+    expect(await lib.recoverInterrupted()).toBe(2);
+    expect((await lib.listChapters('n1')).map((c) => c.audioStatus)).toEqual(['pending', 'pending', 'ready']);
+    expect((await lib.getNote('n1'))?.status).toBe('generating');
+    expect(await lib.recoverInterrupted()).toBe(0);
+  });
+
+  it('exportSnapshot sans audioLocal', async () => {
+    await lib.saveChapter(chapter('k1', 'n1', 0));
+    await lib.putAudio('k1', blob());
+    const s = await lib.exportSnapshot();
+    expect(s.version).toBe(1);
+    expect(s.chapters).toHaveLength(1);
+    expect('audioLocal' in s.chapters[0]).toBe(false);
+  });
+
+  it('onChange : progress puis library, désabonnement', async () => {
+    const seen: string[] = [];
+    const off = lib.onChange((k) => seen.push(k));
+    await lib.saveProgress({ noteId: 'n1', chapterIndex: 0, positionSec: 1, completedChapterIds: [], updatedAt: 0 });
+    await lib.saveNote(note('n1'));
+    expect(seen).toEqual(['progress', 'library']);
+    off();
+    await lib.saveNote(note('n2'));
+    expect(seen).toHaveLength(2);
+  });
+});
+
+describe('library.mergeRemote', () => {
+  const empty = () => ({ version: 1 as const, courses: [], notes: [], chapters: [], progress: [], tombstones: [] });
+
+  it('écrit seulement les différences, garde audioLocal, supprime l’audio des chapitres retirés', async () => {
+    await lib.saveCourse(course('c1'));
+    await lib.saveNote(note('n1'));
+    await lib.saveChapter(chapter('a', 'n1', 0));
+    await lib.saveChapter(chapter('b', 'n1', 1));
+    await lib.putAudio('a', blob());
+    await lib.putAudio('b', blob());
+    const before = await lib.exportSnapshot();
+    const remote = {
+      ...before,
+      chapters: before.chapters.map((c) => (c.id === 'a' ? { ...c, title: 'Distant', updatedAt: c.updatedAt + 1 } : c)),
+      tombstones: [{ id: 'b', kind: 'chapter' as const, deletedAt: Date.now() + 1000 }],
+    };
+    const kinds: string[] = [];
+    lib.onChange((k) => kinds.push(k));
+    const out = await lib.mergeRemote(remote);
+    expect(out.changed).toBe(true);
+    expect(out.local.chapters.map((c) => c.id).sort()).toEqual(['a', 'b']);
+    expect(kinds).toEqual(['library']);
+    const chs = await lib.listChapters('n1');
+    expect(chs.map((c) => [c.id, c.title, c.audioLocal])).toEqual([['a', 'Distant', true]]);
+    expect(await lib.getAudio('a')).toBeDefined();
+    expect(await lib.getAudio('b')).toBeUndefined();
+
+    kinds.length = 0;
+    const again = await lib.mergeRemote(await lib.exportSnapshot());
+    expect(again.changed).toBe(false);
+    expect(kinds).toEqual([]);
+  });
+
+  it('une écriture lancée pendant la fusion n’est pas écrasée', async () => {
+    await lib.saveCourse(course('c1'));
+    await lib.saveNote(note('n1'));
+    const merging = lib.mergeRemote({ ...empty(), courses: [course('c2')] });
+    const saving = lib.saveChapter(chapter('fresh', 'n1', 0)).then(() => lib.putAudio('fresh', blob()));
+    await Promise.all([merging, saving]);
+    expect((await lib.listChapters('n1')).map((c) => c.id)).toEqual(['fresh']);
+    expect(await lib.getAudio('fresh')).toBeDefined();
+    expect((await lib.listCourses()).map((c) => c.id).sort()).toEqual(['c1', 'c2']);
+  });
+
+  it('notes générées localement : marqueur posé puis retiré', async () => {
+    expect(await lib.listLocalGenerations()).toEqual([]);
+    await lib.setLocalGeneration('n1', true);
+    await lib.setLocalGeneration('n2', true);
+    await lib.setLocalGeneration('n1', false);
+    expect(await lib.listLocalGenerations()).toEqual(['n2']);
+    expect(await lib.getSettings()).toEqual(DEFAULT_SETTINGS);
+  });
+});
