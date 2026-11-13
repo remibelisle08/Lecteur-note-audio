@@ -7,6 +7,7 @@ import createPiperPhonemize from '@diffusionstudio/piper-wasm/build/piper_phonem
 import phonemizeWasmUrl from '@diffusionstudio/piper-wasm/build/piper_phonemize.wasm?url';
 import phonemizeDataUrl from '@diffusionstudio/piper-wasm/build/piper_phonemize.data?url';
 import type { WorkerRequest, WorkerResponse } from './engine';
+import { recycling } from './recycle';
 import {
   buildInferenceInputs,
   downloadRatio,
@@ -27,39 +28,40 @@ ort.env.wasm.wasmPaths = { 'ort-wasm-simd.wasm': ortWasmSimdUrl };
 
 const post = (msg: WorkerResponse, transfer: Transferable[] = []) => self.postMessage(msg, transfer);
 
-// ---------- Phonémiseur : un seul module, callMain répété (noExitRuntime = true dans ce build) ----------
+// ---------- Phonémiseur ----------
+// Le module Emscripten de piper-wasm plante après ~64 callMain (« null function or function signature
+// mismatch ») et reste ensuite inutilisable : on le recrée toutes les 40 phrases, et sur erreur (voir recycle.ts).
 type Phonemizer = { callMain(args: string[]): number };
-let phonemizer: Promise<Phonemizer> | null = null;
 let onLine: ((line: string) => void) | null = null;
 let onErr: ((line: string) => void) | null = null;
 
-function getPhonemizer(): Promise<Phonemizer> {
-  phonemizer ??= createPiperPhonemize({
+const createPhonemizer = (): Promise<Phonemizer> =>
+  createPiperPhonemize({
     print: (line: string) => onLine?.(line),
     printErr: (line: string) => onErr?.(line),
     locateFile: (f: string) => (f.endsWith('.wasm') ? phonemizeWasmUrl : f.endsWith('.data') ? phonemizeDataUrl : f),
   }) as Promise<Phonemizer>;
-  return phonemizer;
+
+const withPhonemizer = recycling(createPhonemizer, 40);
+
+function runPhonemizer(mod: Phonemizer, text: string, espeakVoice: string): number[] {
+  let line: string | null = null;
+  onLine = (l) => {
+    line ??= l;
+  };
+  onErr = (l) => console.warn('[piper_phonemize]', l);
+  try {
+    mod.callMain(phonemizeArgs(text, espeakVoice));
+  } finally {
+    onLine = null;
+    onErr = null;
+  }
+  if (line === null) throw new Error('Le phonémiseur n’a rien renvoyé');
+  return parsePhonemeIds(line);
 }
 
-async function phonemize(text: string, espeakVoice: string): Promise<number[]> {
-  const mod = await getPhonemizer();
-  return new Promise<number[]>((resolve, reject) => {
-    let done = false;
-    onLine = (line) => {
-      if (done) return;
-      done = true;
-      try { resolve(parsePhonemeIds(line)); } catch (e) { reject(e); }
-    };
-    onErr = (line) => console.warn('[piper_phonemize]', line);
-    try {
-      mod.callMain(phonemizeArgs(text, espeakVoice));
-    } catch (e) {
-      done = true;
-      reject(e);
-    }
-    if (!done) { done = true; reject(new Error('Le phonémiseur n’a rien renvoyé')); }
-  }).finally(() => { onLine = null; onErr = null; });
+function phonemize(text: string, espeakVoice: string): Promise<number[]> {
+  return withPhonemizer((mod) => runPhonemizer(mod, text, espeakVoice));
 }
 
 // ---------- Stockage OPFS ----------
@@ -161,7 +163,7 @@ async function init(voiceId: string, onRatio: (r: number) => void): Promise<Pipe
   }
   const [s] = await Promise.all([
     ort.InferenceSession.create(new Uint8Array(await files.model.arrayBuffer())),
-    getPhonemizer(),
+    withPhonemizer(() => undefined),
   ]);
   session = s;
   config = cfg;

@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { openLibrary, type Library } from '../../src/library/db';
 import { Generator } from '../../src/tts/generator';
 import type { TtsEngine } from '../../src/tts/engine';
@@ -83,6 +83,8 @@ describe('Generator', () => {
   });
 
   it('chapitre en échec : error, le suivant est généré, la note reste generating', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    onTestFinished(() => logged.mockRestore());
     const lib = await setup([{ title: 'A', text: 'a.' }, { title: 'B', text: 'explosion.' }, { title: 'C', text: 'c.' }]);
     const g = gen(lib, makeEngine({ failOn: 'explosion' }).engine);
     const events: { status: string; message?: string }[] = [];
@@ -94,6 +96,8 @@ describe('Generator', () => {
   });
 
   it('QuotaExceededError : arrêt, message, chapitres suivants intacts', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    onTestFinished(() => logged.mockRestore());
     const lib = await setup([{ title: 'A', text: 'a.' }, { title: 'B', text: 'b.' }]);
     const quota = Object.assign(Object.create(lib), lib, {
       putAudio: async () => { throw new DOMException('full', 'QuotaExceededError'); },

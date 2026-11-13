@@ -183,6 +183,8 @@ export class Generator {
     } catch (err) {
       const quota = isQuota(err);
       const message = quota ? QUOTA_MESSAGE : CHAPTER_ERROR_MESSAGE;
+      // Cause réelle dans la console (F12) pour le diagnostic ; l'utilisateur voit le message en français.
+      console.error('[génération] chapitre en échec :', ch.title, err);
       const latest = await this.stored(ch);
       if (!latest) return 'gone';
       await lib.saveChapter({ ...latest, audioStatus: 'error' });

@@ -39,6 +39,24 @@ describe('EngineCache', () => {
   });
 });
 
+describe('EngineCache — moteur brisé', () => {
+  it('un moteur qui n’est plus vivant est remplacé au prochain get', async () => {
+    const made: (ReturnType<typeof engine> & { alive: () => boolean })[] = [];
+    const cache = new EngineCache(async () => {
+      let ok = true;
+      const e = { ...engine(), alive: () => ok, kill: () => (ok = false) };
+      made.push(e);
+      return e;
+    });
+    const a = await cache.get('siwis');
+    (made[0] as unknown as { kill: () => void }).kill();
+    const b = await cache.get('siwis');
+    expect(b).not.toBe(a);
+    expect(made).toHaveLength(2);
+    expect(made[0].dispose).toHaveBeenCalled();
+  });
+});
+
 describe('VoiceDownload', () => {
   it('le bandeau disparaît quand la création du moteur échoue', async () => {
     let reject!: (e: Error) => void;
