@@ -1,6 +1,6 @@
 import type { TtsEngine } from '../tts/engine';
 
-type Disposable = TtsEngine & { dispose?(): void };
+type Disposable = TtsEngine & { dispose?(): void; alive?(): boolean };
 type Factory = (voiceId: string, onDownload: (ratio: number) => void) => Promise<Disposable>;
 
 /**
@@ -13,7 +13,14 @@ export class EngineCache {
 
   constructor(private create: Factory) {}
 
-  get = (voiceId: string): Promise<TtsEngine> => {
+  get = async (voiceId: string): Promise<TtsEngine> => {
+    if (this.current?.voiceId === voiceId) {
+      const cached = this.current;
+      const e = await cached.engine.catch(() => undefined);
+      // Moteur brisé (worker planté) : on le remplace au lieu de faire échouer tous les chapitres suivants.
+      if (!e || !e.alive || e.alive()) return cached.engine;
+      if (this.current === cached) this.release();
+    }
     if (this.current?.voiceId === voiceId) return this.current.engine;
     this.release();
     const engine = this.create(voiceId, (r) => this.downloadListeners.forEach((l) => l(r)));

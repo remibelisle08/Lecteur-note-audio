@@ -47,7 +47,7 @@ type Pending = { resolve: (r: WorkerResponse) => void; reject: (e: Error) => voi
 export async function createWorkerEngine(
   voiceId: string,
   onDownload?: (ratio: number) => void,
-): Promise<TtsEngine & { dispose(): void }> {
+): Promise<TtsEngine & { dispose(): void; alive(): boolean }> {
   if (!isWasmSimdSupported()) throw new Error(SIMD_ERROR);
   const worker = new Worker(new URL('./tts.worker.ts', import.meta.url), { type: 'module' });
   const pending = new Map<number, Pending>();
@@ -109,6 +109,8 @@ export async function createWorkerEngine(
       if (res.type !== 'audio') throw new Error('Réponse inattendue du moteur vocal');
       return res.pcm;
     },
+    /** Faux si le worker a planté : EngineCache en relance alors un neuf. */
+    alive: () => dead === null,
     dispose,
   };
 }
