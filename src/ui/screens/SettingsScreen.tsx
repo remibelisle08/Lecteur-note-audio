@@ -182,6 +182,10 @@ export function SettingsScreen() {
           </button>
         )}
       </section>
+
+      <p>
+        <a href={`${import.meta.env.BASE_URL}confidentialite.html`}>Politique de confidentialité</a>
+      </p>
     </>
   );
 }
